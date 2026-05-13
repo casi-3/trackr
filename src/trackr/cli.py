@@ -5,6 +5,7 @@ import typer
 from trackr import __version__, dashboard as dashboard_mod, healthcheck, ui, updater, upload_queue
 from trackr.config import load_config
 from trackr.flows import configure as configure_flow
+from trackr.flows import delete as delete_flow
 from trackr.flows import inspect as inspect_flow
 from trackr.flows import movie as movie_flow
 from trackr.flows import rejection as rejection_flow
@@ -74,6 +75,7 @@ def _main_menu() -> str | None:
         )
     choices += [
         questionary.Choice("🔍  Inspecter un fichier (mediainfo)", value="inspect"),
+        questionary.Choice("🗑   Supprimer un torrent", value="delete"),
         questionary.Choice("⚙️   Configuration", value="configure"),
         questionary.Choice("🔄  Re-vérifier les accès", value="recheck"),
         questionary.Choice("⬆️   Vérifier les mises à jour", value="update"),
@@ -143,6 +145,9 @@ def _loop() -> None:
             dashboard_mod.invalidate()  # rafraîchir après actions
         elif action == "inspect":
             inspect_flow.run()
+        elif action == "delete":
+            delete_flow.run()
+            dashboard_mod.invalidate()
         elif action == "configure":
             configure_flow.run()
             invalidate_health()

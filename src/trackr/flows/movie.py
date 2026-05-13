@@ -338,10 +338,7 @@ def run() -> None:
     # 17. Récap fichiers générés (pour seed manuel si besoin)
     _show_artifacts_recap(out_dir, plans, results)
 
-    # 18. Rollback rapide (si au moins un upload a réussi)
-    _offer_rollback(results, cfg)
-
-    # 19. Mode batch : enchaîner un autre upload sans repasser par le menu ?
+    # 18. Mode batch : enchaîner un autre upload sans repasser par le menu ?
     if questionary.confirm("\nUploader un autre film maintenant ?", default=False).ask():
         return run()
 
@@ -1091,89 +1088,6 @@ def _print_post_result(r: PostResult) -> None:
         ui.console.print(Panel(body, border_style=ui.SUCCESS, title=title))
     else:
         ui.console.print(ui.error_panel(f"{r.tracker.upper()} a échoué", r.message))
-
-
-def _offer_rollback(results: list[PostResult], cfg: Config) -> None:
-    """Propose de supprimer un ou plusieurs uploads qui viennent d'être créés."""
-    deletable = [r for r in results if r.ok and r.delete_identifier]
-    if not deletable:
-        return
-
-    ui.console.print()
-    want = questionary.confirm(
-        "Supprimer un ou plusieurs uploads qui viennent d'être publiés ?",
-        default=False,
-    ).ask()
-    if not want:
-        return
-
-    choices = [
-        questionary.Choice(
-            f"{r.tracker.upper()}  ·  {r.info_hash[:12]}…  ·  {r.message[:40]}",
-            value=r,
-        )
-        for r in deletable
-    ]
-    picked = questionary.checkbox(
-        "Sélectionne ceux à supprimer :",
-        choices=choices,
-        validate=lambda a: True if a else "Sélectionne au moins un upload (ou Ctrl+C pour annuler).",
-    ).ask()
-    if not picked:
-        return
-
-    confirm = questionary.confirm(
-        f"Confirmer la suppression de {len(picked)} upload(s) ? Action irréversible.",
-        default=False,
-    ).ask()
-    if not confirm:
-        ui.console.print(f"[{ui.MUTED}]Suppression annulée.[/]")
-        return
-
-    for r in picked:
-        _delete_one(r, cfg)
-
-
-def _delete_one(r: PostResult, cfg: Config) -> None:
-    ident = r.delete_identifier
-    try:
-        with ui.console.status(f"[cyan]Suppression {r.tracker.upper()}…[/cyan]", spinner="dots"):
-            if r.tracker == "c411":
-                if not cfg.c411_session_valid():
-                    raise AuthError(
-                        "C411 : session web expirée. Reconfigure en mode Guidé "
-                        "(le Bearer seul ne permet pas DELETE)."
-                    )
-                msg = c411_api.delete_torrent(cfg.c411_session, ident)
-            elif r.tracker == "torr9":
-                jwt = ensure_torr9_jwt(cfg)
-                msg = torr9_api.delete_torrent(jwt, int(ident))
-            else:
-                ui.console.print(ui.error_panel("Tracker inconnu", r.tracker))
-                return
-    except AuthError as e:
-        ui.console.print(ui.error_panel(f"Auth refusée ({r.tracker.upper()})", str(e)))
-        return
-    except TrackerError as e:
-        body = str(e)
-        if r.tracker == "torr9" and "limite" in body.lower():
-            body += (
-                f"\n\n[{ui.MUTED}]Info : Torr9 limite les suppressions à 5/jour. "
-                f"Tu pourras réessayer demain, ou contacter un modérateur si urgent.[/]"
-            )
-        ui.console.print(ui.error_panel(f"Suppression {r.tracker.upper()} échouée", body))
-        return
-
-    ui.console.print(
-        Panel(
-            Text.from_markup(
-                f"[bold {ui.SUCCESS}]✓ {r.tracker.upper()} supprimé[/]\n"
-                f"[{ui.MUTED}]{msg}[/]\n"
-                f"[{ui.MUTED}]info hash : {r.info_hash}[/]"
-            ),
-            border_style=ui.SUCCESS,
-        )
-    )
 
 
 def _offer_seed(
