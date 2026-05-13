@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import questionary
+import typer
+from trackr import __version__, dashboard as dashboard_mod, healthcheck, ui, upload_queue
+from trackr.config import load_config
+from trackr.flows import configure as configure_flow
+from trackr.flows import inspect as inspect_flow
+from trackr.flows import movie as movie_flow
+from trackr.flows import retry as retry_flow
+
+app = typer.Typer(
+    add_completion=False,
+    help="trackr — CLI guidé pour publier sur plusieurs trackers.",
+    invoke_without_command=True,
+)
+
+
+# Cache des résultats du healthcheck pour la durée de la session.
+# Invalidé après un retour de Configuration (les creds ont pu changer).
+_health: list[healthcheck.Check] = []
+_health_dirty: bool = True
+
+
+def _refresh_health_if_needed() -> list[healthcheck.Check]:
+    global _health, _health_dirty
+    if _health_dirty or not _health:
+        cfg = load_config()
+        with ui.console.status("[cyan]Vérification des accès…[/cyan]", spinner="dots"):
+            _health = healthcheck.run_all(cfg)
+        _health_dirty = False
+    return _health
+
+
+def invalidate_health() -> None:
+    """Force un re-check au prochain draw de la home (ex: après une reconfig)."""
+    global _health_dirty
+    _health_dirty = True
+    dashboard_mod.invalidate()
+
+
+def _draw_home() -> None:
+    ui.clear()
+    ui.console.print(ui.banner())
+    # Healthcheck silencieux (refresh auto JWT/SID si besoin)
+    _refresh_health_if_needed()
+    ui.console.print()
+    with ui.console.status("[cyan]Chargement du dashboard…[/cyan]", spinner="dots"):
+        dash = dashboard_mod.get(load_config())
+    ui.console.print(ui.render_dashboard(dash))
+    ui.console.print()
+
+
+def _main_menu() -> str | None:
+    choices = [questionary.Choice("📤  Uploader un torrent", value="upload")]
+    pending = upload_queue.pending_count()
+    if pending:
+        choices.append(
+            questionary.Choice(
+                f"🎯  Reprendre les uploads en attente ({pending})",
+                value="retry",
+            )
+        )
+    choices += [
+        questionary.Choice("🔍  Inspecter un fichier (mediainfo)", value="inspect"),
+        questionary.Choice("⚙️   Configuration", value="configure"),
+        questionary.Choice("🔄  Re-vérifier les accès", value="recheck"),
+        questionary.Choice("👋  Quitter", value="quit"),
+    ]
+    return questionary.select("Que veux-tu faire ?", choices=choices).ask()
+
+
+def _upload_menu() -> None:
+    ui.clear()
+    choice = questionary.select(
+        "Que veux-tu uploader ?",
+        choices=[
+            questionary.Choice("🎬  Un film", value="movie"),
+            questionary.Choice("📺  Une série  [bientôt]", value="series", disabled="à venir"),
+            questionary.Choice("← Retour", value="back"),
+        ],
+    ).ask()
+    if choice == "movie":
+        movie_flow.run()
+
+
+def _loop() -> None:
+    while True:
+        _draw_home()
+        action = _main_menu()
+        if action in (None, "quit"):
+            ui.console.print(f"[{ui.MUTED}]À bientôt.[/]")
+            return
+        if action == "upload":
+            _upload_menu()
+        elif action == "retry":
+            retry_flow.run()
+        elif action == "inspect":
+            inspect_flow.run()
+        elif action == "configure":
+            configure_flow.run()
+            invalidate_health()
+        elif action == "recheck":
+            invalidate_health()
+
+
+@app.callback()
+def root(
+    ctx: typer.Context,
+    version: bool = typer.Option(False, "--version", "-V", help="Affiche la version et quitte."),
+) -> None:
+    if version:
+        ui.console.print(f"trackr {__version__}")
+        raise typer.Exit()
+    if ctx.invoked_subcommand is None:
+        try:
+            _loop()
+        except KeyboardInterrupt:
+            ui.console.print(f"\n[{ui.MUTED}]Interrompu.[/]")
+
+
+def main() -> None:
+    app()
+
+
+if __name__ == "__main__":
+    main()
