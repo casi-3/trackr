@@ -48,20 +48,31 @@ Aucune donnée n'est collectée, aucune donnée n'est partagée.
 
 ---
 
-## Prérequis
-
-- Python ≥ 3.10
-- `mediainfo` (CLI) :
-  - Debian / Ubuntu : `sudo apt install mediainfo`
-  - macOS : `brew install media-info`
-  - Windows : [binaire officiel](https://mediaarea.net/MediaInfo)
-- qBittorrent ≥ 4.0 (optionnel, uniquement pour le seed automatique).
-  L'auth par API Key nécessite qBittorrent ≥ 5.2.0 ; sinon mode
-  user/password.
-
----
-
 ## Installation
+
+Deux options : binaire pré-compilé (autonome, `mediainfo` inclus) ou
+install depuis les sources.
+
+### Binaire pré-compilé (recommandé)
+
+Télécharge le binaire pour ton OS depuis la
+[page des releases](../../releases/latest) :
+
+| OS | Binaire |
+|---|---|
+| Windows | `trackr-windows-x64.exe` |
+| Linux | `trackr-linux-x64` |
+| macOS | `trackr-macos-arm64` |
+
+Pas de dépendance à installer — `mediainfo` est embarqué.
+
+Sous Linux / macOS : `chmod +x trackr-*` puis exécute.
+
+### Depuis les sources
+
+Prérequis : Python ≥ 3.10 et `mediainfo` (CLI) installé séparément
+(`apt install mediainfo`, `brew install media-info`, ou
+[binaire officiel](https://mediaarea.net/MediaInfo) sous Windows).
 
 ```bash
 git clone https://github.com/casi-3/trackr.git
@@ -70,7 +81,11 @@ pip install -e .
 trackr
 ```
 
-Compatible Linux, macOS, Windows.
+### Optionnel
+
+qBittorrent ≥ 4.0 pour le seed automatique après upload.
+L'auth par API Key nécessite qBittorrent ≥ 5.2.0 ; sinon mode
+user/password.
 
 ---
 

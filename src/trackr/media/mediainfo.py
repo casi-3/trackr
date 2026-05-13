@@ -3,8 +3,20 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _mediainfo_executable() -> str | None:
+    """Cherche le binaire mediainfo. Priorité au bundle PyInstaller, sinon PATH."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        name = "MediaInfo.exe" if sys.platform == "win32" else "mediainfo"
+        bundled = Path(meipass) / name
+        if bundled.exists():
+            return str(bundled)
+    return shutil.which("mediainfo") or shutil.which("MediaInfo")
 
 
 class MediainfoError(RuntimeError):
@@ -98,10 +110,11 @@ def raw_text(path: Path, *, sanitize_path: bool = True) -> str:
     Par défaut, `Complete name` est nettoyé pour ne contenir que le nom du
     fichier (pas le chemin absolu, qui peut révéler la structure du disque).
     """
-    if shutil.which("mediainfo") is None:
+    exe = _mediainfo_executable()
+    if exe is None:
         raise MediainfoError("mediainfo introuvable dans le PATH.")
     proc = subprocess.run(
-        ["mediainfo", str(path)],
+        [exe, str(path)],
         capture_output=True,
         text=True,
     )
@@ -121,7 +134,8 @@ def raw_text(path: Path, *, sanitize_path: bool = True) -> str:
 
 
 def probe(path: Path) -> MediaInfo:
-    if shutil.which("mediainfo") is None:
+    exe = _mediainfo_executable()
+    if exe is None:
         raise MediainfoError(
             "mediainfo introuvable dans le PATH. "
             "Installer avec `apt install mediainfo` (Debian/Ubuntu) ou `brew install media-info` (macOS)."
@@ -130,7 +144,7 @@ def probe(path: Path) -> MediaInfo:
         raise MediainfoError(f"Fichier introuvable : {path}")
 
     proc = subprocess.run(
-        ["mediainfo", "--Output=JSON", "--Full", str(path)],
+        [exe, "--Output=JSON", "--Full", str(path)],
         capture_output=True,
         text=True,
     )
