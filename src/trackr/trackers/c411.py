@@ -634,17 +634,38 @@ def list_notifications(session_cookie: str, limit: int = 50) -> list[dict]:
     return items if isinstance(items, list) else []
 
 
-def list_rejections(session_cookie: str) -> list[Rejection]:
-    """Filtre les notifications `torrent_revision_requested` (= torrent rejeté)."""
+def list_rejections(session_cookie: str, *, include_read: bool = False) -> list[Rejection]:
+    """Filtre les notifications `torrent_revision_requested` (= torrent rejeté).
+
+    Par défaut on exclut les notifs déjà marquées lues — c'est ce que
+    trackr fait automatiquement après un resubmit réussi, donc « non lu »
+    correspond aux rejets restant à traiter. Pour un audit complet, passer
+    `include_read=True`.
+
+    En complément, on cross-check le statut serveur du torrent : si la notif
+    est non-lue mais que le torrent n'est plus en `revision_requested`
+    (corrigé hors trackr, supprimé…), on l'exclut aussi.
+    """
     out: list[Rejection] = []
     for n in list_notifications(session_cookie):
         if n.get("type") != "torrent_revision_requested":
             continue
+        if not include_read and n.get("isRead"):
+            continue
         d = n.get("data") or {}
+        info_hash = str(d.get("infoHash") or "")
+        # Vérif statut serveur — best-effort, ne bloque pas si le GET échoue
+        if info_hash:
+            try:
+                t = fetch_torrent(session_cookie, info_hash)
+                if t.get("status") != "revision_requested":
+                    continue
+            except (AuthError, TrackerError):
+                pass
         out.append(
             Rejection(
                 notification_id=int(n.get("id") or 0),
-                info_hash=str(d.get("infoHash") or ""),
+                info_hash=info_hash,
                 torrent_name=str(d.get("torrentName") or n.get("title") or ""),
                 reason=str(d.get("reason") or n.get("message") or ""),
                 created_at=str(n.get("createdAt") or ""),
