@@ -60,22 +60,22 @@ def rule(text: str = "", style: str = ACCENT) -> RenderableType:
 
 
 def success_panel(title: str, body: RenderableType | str) -> Panel:
-    content = Text(body) if isinstance(body, str) else body
+    content = Text.from_markup(body) if isinstance(body, str) else body
     return Panel(content, title=f"[bold {SUCCESS}]✓ {title}[/]", border_style=SUCCESS)
 
 
 def error_panel(title: str, body: RenderableType | str) -> Panel:
-    content = Text(body) if isinstance(body, str) else body
+    content = Text.from_markup(body) if isinstance(body, str) else body
     return Panel(content, title=f"[bold {ERROR}]✗ {title}[/]", border_style=ERROR)
 
 
 def warn_panel(title: str, body: RenderableType | str) -> Panel:
-    content = Text(body) if isinstance(body, str) else body
+    content = Text.from_markup(body) if isinstance(body, str) else body
     return Panel(content, title=f"[bold {WARN}]! {title}[/]", border_style=WARN)
 
 
 def info_panel(title: str, body: RenderableType | str) -> Panel:
-    content = Text(body) if isinstance(body, str) else body
+    content = Text.from_markup(body) if isinstance(body, str) else body
     return Panel(content, title=f"[bold {ACCENT}]{title}[/]", border_style=ACCENT)
 
 
