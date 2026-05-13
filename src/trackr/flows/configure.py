@@ -103,15 +103,15 @@ def _render_profile(tracker: str, profile: Profile, extras: dict[str, str]) -> P
 
 
 def _human_size(n: int) -> str:
-    """Décimal (GB, MB) — cohérent avec qBit/OS/trackers."""
+    """Binaire (base 1024) — cohérent avec qBittorrent et Windows Explorer."""
     if n <= 0:
         return "?"
-    units = ["B", "kB", "MB", "GB", "TB"]
+    units = ["B", "KB", "MB", "GB", "TB"]
     size = float(n)
     for unit in units:
-        if size < 1000 or unit == units[-1]:
+        if size < 1024 or unit == units[-1]:
             return f"{size:.2f} {unit}"
-        size /= 1000
+        size /= 1024
     return f"{size:.2f} {units[-1]}"
 
 

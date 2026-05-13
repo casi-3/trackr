@@ -30,16 +30,30 @@ def _bitrate_human(n: int) -> str:
 
 
 def _size_human(n: int) -> str:
-    """Taille en unités décimales (GB, MB) — cohérent avec qBittorrent, OS et trackers."""
+    """Taille en base binaire (1024) avec labels GB/MB — convention qBittorrent.
+
+    qBittorrent, Windows et la sortie mediainfo (FileSize dans le NFO)
+    calculent tous en binaire mais labellisent en GB/MB (même si l'IEC dit
+    GiB/MiB). On reste cohérent avec ce que l'utilisateur voit dans qBit et
+    Windows Explorer plutôt qu'avec la norme SI décimale.
+    """
     if n <= 0:
         return "?"
-    units = ["B", "kB", "MB", "GB", "TB"]
+    units = ["B", "KB", "MB", "GB", "TB"]
     size = float(n)
     for unit in units:
-        if size < 1000 or unit == units[-1]:
+        if size < 1024 or unit == units[-1]:
             return f"{size:.2f} {unit}"
-        size /= 1000
+        size /= 1024
     return f"{size:.2f} {units[-1]}"
+
+
+def _size_with_bytes(n: int) -> str:
+    """`1.67 GB (1 797 072 997 octets)` — sans ambiguïté possible sur la taille."""
+    if n <= 0:
+        return "?"
+    grouped = f"{n:,}".replace(",", " ")
+    return f"{_size_human(n)} ({grouped} octets)"
 
 
 def _duration_human(seconds: float) -> str:
@@ -495,7 +509,7 @@ def build_description_bbcode(
         lines.append(f"[b]Team :[/b] {team_tag}")
     lines.append(f"[b]Nombre de fichier(s) :[/b] {file_count}")
     poids = total_size if total_size and total_size > 0 else info.file_size
-    lines.append(f"[b]Poids total :[/b] {_size_human(poids)}")
+    lines.append(f"[b]Poids total :[/b] {_size_with_bytes(poids)}")
     lines.append(f"[b]Durée :[/b] {_duration_human(info.duration_s)}")
     lines.append(f"[b]Conteneur :[/b] {info.container or '?'}")
     lines.append("")
