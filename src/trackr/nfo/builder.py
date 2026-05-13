@@ -78,7 +78,12 @@ def to_dot_case(s: str) -> str:
 
 
 def video_codec_tag(codec: str, *, scene_style: bool = True) -> str:
-    """HEVC → x265 / H265 selon `scene_style` ; AVC → x264 / H264 ; etc."""
+    """HEVC → x265 / H265 selon `scene_style` ; AVC → x264 / H264 ; etc.
+
+    `scene_style=True` ⇒ re-encode (x265/x264) ; `scene_style=False` ⇒ stream
+    direct depuis la source (H265/H264). Pour C411 la règle est : si le NFO
+    contient « Encoding settings » → re-encode → x26x ; sinon → H26x.
+    """
     c = (codec or "").lower()
     if "hevc" in c or "h.265" in c or "h265" in c:
         return "x265" if scene_style else "H265"
@@ -89,6 +94,14 @@ def video_codec_tag(codec: str, *, scene_style: bool = True) -> str:
     if "vp9" in c:
         return "VP9"
     return codec or ""
+
+
+_ENCODING_SETTINGS_RX = re.compile(r"^\s*Encoding settings\s*:", re.IGNORECASE | re.MULTILINE)
+
+
+def has_encoding_settings(nfo_text: str) -> bool:
+    """Vrai si le NFO mediainfo contient une ligne « Encoding settings » (re-encode)."""
+    return bool(_ENCODING_SETTINGS_RX.search(nfo_text or ""))
 
 
 def audio_codec_tag(codec: str) -> str:
@@ -213,15 +226,19 @@ def suggest_title_c411(
     source: str,
     language_tag: str,
     team: str = "NOTAG",
+    is_reencode: bool = True,
 ) -> str:
-    """Format C411 Films : `Nom.Année.Langue.Résolution.Source.CodecAudio[.Channels].CodecVidéo-TEAM`."""
+    """Format C411 Films : `Nom.Année.Langue.Résolution.Source.CodecAudio[.Channels].CodecVidéo-TEAM`.
+
+    `is_reencode=False` ⇒ codec en H265/H264 (release directe depuis la source).
+    """
     name = to_dot_case(hit.title)
     year = hit.year or ""
     res = resolution_label(info)  # "1080p" / "2160p" / etc.
     first_audio = info.audio[0] if info.audio else None
     acodec = audio_codec_tag(first_audio.codec) if first_audio else ""
     chans = channels_tag(first_audio.channels) if first_audio else ""
-    vcodec = video_codec_tag(info.video.codec, scene_style=True)
+    vcodec = video_codec_tag(info.video.codec, scene_style=is_reencode)
 
     parts = [name]
     if year:
@@ -249,10 +266,11 @@ def suggest_title_torr9(
     info: MediaInfo,
     *,
     source: str = "WEB",
+    is_reencode: bool = True,
 ) -> str:
     """Torr9 accepte un format plus libre — on garde un nom lisible humain."""
     res = resolution_label(info)
-    vcodec = video_codec_tag(info.video.codec, scene_style=True)
+    vcodec = video_codec_tag(info.video.codec, scene_style=is_reencode)
     first_audio = info.audio[0] if info.audio else None
     acodec = audio_codec_tag(first_audio.codec) if first_audio else ""
     chans = channels_tag(first_audio.channels) if first_audio else ""
@@ -388,7 +406,11 @@ def build_description_bbcode(
     vod_platform: str = "",
     team_tag: str = "",
     file_count: int = 1,
+    total_size: int | None = None,
 ) -> str:
+    """`total_size` (bytes) prime sur `info.file_size` pour le « Poids total » —
+    indispensable pour matcher la taille calculée par le tracker (= payload du
+    .torrent), surtout si mediainfo renvoie une valeur légèrement différente."""
     lines: list[str] = []
 
     # Poster
@@ -453,7 +475,8 @@ def build_description_bbcode(
     if team_tag and team_tag != "NOTAG":
         lines.append(f"[b]Team :[/b] {team_tag}")
     lines.append(f"[b]Nombre de fichier(s) :[/b] {file_count}")
-    lines.append(f"[b]Poids total :[/b] {_size_human(info.file_size)}")
+    poids = total_size if total_size and total_size > 0 else info.file_size
+    lines.append(f"[b]Poids total :[/b] {_size_human(poids)}")
     lines.append(f"[b]Durée :[/b] {_duration_human(info.duration_s)}")
     lines.append(f"[b]Conteneur :[/b] {info.container or '?'}")
     lines.append("")

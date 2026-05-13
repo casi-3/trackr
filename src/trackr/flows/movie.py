@@ -26,6 +26,7 @@ from trackr.nfo.builder import (
     detect_language_tag,
     detect_source_tag,
     detect_team_tag,
+    has_encoding_settings,
     slugify,
     suggest_title_c411,
 )
@@ -188,9 +189,25 @@ def run() -> None:
     if not hit:
         return
 
-    # 7. Titre release (format C411 strict, appliqué partout)
+    # 7. NFO en avance (on a besoin de savoir si 'Encoding settings' est présent
+    # pour choisir le tag codec : x265 (re-encode) vs H265 (stream direct)).
+    try:
+        nfo_text = build_nfo(file_path)
+    except MediainfoError as e:
+        ui.console.print(ui.error_panel("Construction NFO échouée", str(e)))
+        ui.press_enter()
+        return
+    is_reencode = has_encoding_settings(nfo_text)
+    if not is_reencode:
+        ui.console.print(
+            f"[{ui.MUTED}]NFO sans « Encoding settings » → release directe : "
+            f"codec en H264/H265 (pas x264/x265).[/]"
+        )
+
+    # 8. Titre release (format C411 strict, appliqué partout)
     title_default = suggest_title_c411(
         hit, info, source=source_hint, language_tag=language_tag, team=team_tag,
+        is_reencode=is_reencode,
     )
     ui.console.print(f"[{ui.MUTED}]Format : Nom.Année.Lang.Res.Source.Audio.Vidéo-TEAM (sans accents).[/]")
     release_title = questionary.text("Titre release :", default=title_default).ask()
@@ -219,13 +236,19 @@ def run() -> None:
     out_dir = _build_dir(hit, info)
     ui.console.print(f"[{ui.MUTED}]Dossier de sortie : {out_dir}[/]")
 
-    nfo_text = build_nfo(file_path)
+    # Taille payload = exactement ce que le tracker calcule à partir du .torrent.
+    # On stat le fichier (flow single-file) pour matcher au byte près.
+    try:
+        payload_size = file_path.stat().st_size
+    except OSError:
+        payload_size = info.file_size
     description = build_description_bbcode(
         hit, info,
         release_title=release_title,
         source=source_hint,
         vod_platform=vod_platform,
         team_tag=team_tag,
+        total_size=payload_size,
     )
     nfo_path = out_dir / "release.nfo"
     nfo_path.write_text(nfo_text, encoding="utf-8")
