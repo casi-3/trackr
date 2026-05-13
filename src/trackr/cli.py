@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import questionary
 import typer
-from trackr import __version__, dashboard as dashboard_mod, healthcheck, ui, upload_queue
+from trackr import __version__, dashboard as dashboard_mod, healthcheck, ui, updater, upload_queue
 from trackr.config import load_config
 from trackr.flows import configure as configure_flow
 from trackr.flows import inspect as inspect_flow
@@ -76,6 +76,7 @@ def _main_menu() -> str | None:
         questionary.Choice("🔍  Inspecter un fichier (mediainfo)", value="inspect"),
         questionary.Choice("⚙️   Configuration", value="configure"),
         questionary.Choice("🔄  Re-vérifier les accès", value="recheck"),
+        questionary.Choice("⬆️   Vérifier les mises à jour", value="update"),
         questionary.Choice("👋  Quitter", value="quit"),
     ]
     return questionary.select("Que veux-tu faire ?", choices=choices).ask()
@@ -95,7 +96,38 @@ def _upload_menu() -> None:
         movie_flow.run()
 
 
+def _check_update_blocking() -> None:
+    """Check GitHub releases au démarrage. Non-bloquant en cas d'erreur réseau."""
+    with ui.console.status("[cyan]Vérification des mises à jour…[/cyan]", spinner="dots"):
+        info = updater.check()
+    if info is None:
+        return
+    ui.console.print()
+    ui.console.print(
+        ui.info_panel(
+            f"🚀 Trackr {info.latest_tag} disponible",
+            f"Tu utilises [bold]{info.current_version}[/]. Nouvelle version : [bold]{info.latest_version}[/].\n"
+            f"[{ui.MUTED}]{info.html_url}[/]",
+        )
+    )
+    mode = updater.detect_install_mode()
+    if mode in ("windows-binary", "pip"):
+        ui.console.print(f"[{ui.MUTED}]{updater.manual_instructions(info)}[/]")
+        questionary.text(
+            "Appuie sur Entrée pour continuer sans mettre à jour…",
+            default="",
+        ).ask()
+        return
+    if not questionary.confirm("Mettre à jour maintenant ?", default=True).ask():
+        return
+    try:
+        updater.apply_update(info)  # ne revient pas si succès (execv)
+    except updater.UpdateError as e:
+        ui.console.print(ui.error_panel("Mise à jour échouée", str(e)))
+
+
 def _loop() -> None:
+    _check_update_blocking()
     while True:
         _draw_home()
         action = _main_menu()
@@ -116,6 +148,8 @@ def _loop() -> None:
             invalidate_health()
         elif action == "recheck":
             invalidate_health()
+        elif action == "update":
+            _check_update_blocking()
 
 
 @app.callback()
