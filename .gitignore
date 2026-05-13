@@ -101,7 +101,6 @@ api-key*
 *.nfo
 *.bbcode
 manifest.json
-release.*
 
 # Logs
 *.log

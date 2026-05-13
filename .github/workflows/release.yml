@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  MEDIAINFO_VERSION: "24.06"
+  PYTHON_VERSION: "3.11"
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            asset_name: trackr-windows-x64.exe
+            bundle_mediainfo: true
+          - os: ubuntu-latest
+            asset_name: trackr-linux-x64
+            bundle_mediainfo: true
+          - os: macos-latest
+            asset_name: trackr-macos-arm64
+            bundle_mediainfo: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      # ─────────────── MediaInfo CLI (Windows) ───────────────
+      - name: Fetch MediaInfo (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $url = "https://mediaarea.net/download/binary/mediainfo/${{ env.MEDIAINFO_VERSION }}/MediaInfo_CLI_${{ env.MEDIAINFO_VERSION }}_Windows_x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile mediainfo.zip
+          Expand-Archive mediainfo.zip -DestinationPath mediainfo_bundle
+          Get-ChildItem mediainfo_bundle -Recurse | Select-Object FullName
+
+      # ─────────────── MediaInfo CLI (Linux) ───────────────
+      - name: Fetch MediaInfo (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mediainfo
+          mkdir -p mediainfo_bundle
+          cp "$(which mediainfo)" mediainfo_bundle/mediainfo
+
+      # ─────────────── MediaInfo CLI (macOS) ───────────────
+      - name: Fetch MediaInfo (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew install media-info
+          mkdir -p mediainfo_bundle
+          cp "$(which mediainfo)" mediainfo_bundle/mediainfo
+
+      # ─────────────── Build (Windows) ───────────────
+      - name: Build executable (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          pyinstaller --onefile `
+            --name trackr `
+            --add-binary "mediainfo_bundle\MediaInfo.exe;." `
+            --console `
+            src/trackr/__main__.py
+          Get-ChildItem dist
+
+      # ─────────────── Build (Linux / macOS) ───────────────
+      - name: Build executable (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          pyinstaller --onefile \
+            --name trackr \
+            --add-binary "mediainfo_bundle/mediainfo:." \
+            --console \
+            src/trackr/__main__.py
+          ls -la dist/
+
+      # ─────────────── Rename artifact ───────────────
+      - name: Rename artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Move-Item dist\trackr.exe dist\${{ matrix.asset_name }}
+
+      - name: Rename artifact (Unix)
+        if: matrix.os != 'windows-latest'
+        run: mv dist/trackr dist/${{ matrix.asset_name }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}
