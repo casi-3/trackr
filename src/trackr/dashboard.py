@@ -36,6 +36,8 @@ class TrackerSnapshot:
     role: str = ""
     # Uploads (liste normalisée)
     uploads: list[dict] = field(default_factory=list)
+    # Rejets (uniquement C411 pour l'instant : torrent_revision_requested)
+    rejections: list = field(default_factory=list)  # list[c411_api.Rejection]
 
     @property
     def pending(self) -> list[dict]:
@@ -129,6 +131,12 @@ def _fetch_c411(cfg: Config) -> TrackerSnapshot:
         snap.uploads = [_normalize_c411_upload(i) for i in items]
     except (AuthError, TrackerError) as e:
         snap.error = str(e)
+    # Rejets (= notifications torrent_revision_requested). Session web requise.
+    if cfg.c411_session and cfg.c411_session_valid():
+        try:
+            snap.rejections = c411_api.list_rejections(cfg.c411_session)
+        except (AuthError, TrackerError):
+            pass  # best-effort
     return snap
 
 

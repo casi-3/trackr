@@ -602,6 +602,204 @@ def list_my_uploads(api_key: str, username: str, limit: int = 20) -> list[dict]:
     return items if isinstance(items, list) else []
 
 
+@dataclass
+class Rejection:
+    """Une demande de révision (= rejet) C411 extraite des notifications."""
+    notification_id: int
+    info_hash: str
+    torrent_name: str
+    reason: str
+    created_at: str  # ISO timestamp
+
+
+def list_notifications(session_cookie: str, limit: int = 50) -> list[dict]:
+    """GET /api/notifications — liste brute des notifs (session web requise)."""
+    if not session_cookie:
+        raise AuthError("C411 notifications : session web requise.")
+    cookies = {SESSION_COOKIE_NAME: session_cookie}
+    try:
+        with make_client(base_url=WEB_BASE, cookies=cookies) as client:
+            resp = client.get("/api/notifications", params={"limit": str(limit)})
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 notifications : session refusée — reconfigure en Guidé.")
+    if resp.status_code != 200:
+        raise TrackerError(f"C411 /api/notifications : HTTP {resp.status_code}")
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 : JSON notifications invalide ({e})") from e
+    items = data.get("data") if isinstance(data, dict) else data
+    return items if isinstance(items, list) else []
+
+
+def list_rejections(session_cookie: str) -> list[Rejection]:
+    """Filtre les notifications `torrent_revision_requested` (= torrent rejeté)."""
+    out: list[Rejection] = []
+    for n in list_notifications(session_cookie):
+        if n.get("type") != "torrent_revision_requested":
+            continue
+        d = n.get("data") or {}
+        out.append(
+            Rejection(
+                notification_id=int(n.get("id") or 0),
+                info_hash=str(d.get("infoHash") or ""),
+                torrent_name=str(d.get("torrentName") or n.get("title") or ""),
+                reason=str(d.get("reason") or n.get("message") or ""),
+                created_at=str(n.get("createdAt") or ""),
+            )
+        )
+    return out
+
+
+def _fetch_csrf_token(client: httpx.Client) -> str:
+    """Récupère le csrf-token meta depuis la home (la page /login peut rediriger pour un user loggué)."""
+    r = client.get("/")
+    if r.status_code != 200:
+        raise TrackerError(f"C411 / : HTTP {r.status_code}")
+    return _extract_csrf(r.text)
+
+
+def mark_notification_read(session_cookie: str, notification_id: int) -> None:
+    """PATCH /api/notifications/{id} body {isRead: true}."""
+    if not session_cookie:
+        raise AuthError("C411 : session web requise.")
+    cookies = {SESSION_COOKIE_NAME: session_cookie}
+    try:
+        with make_client(base_url=WEB_BASE, cookies=cookies) as client:
+            csrf = _fetch_csrf_token(client)
+            resp = client.patch(
+                f"/api/notifications/{notification_id}",
+                json={"isRead": True},
+                headers={"csrf-token": csrf, "Referer": f"{WEB_BASE}/", "Content-Type": "application/json"},
+            )
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 mark-read : session/CSRF refusé.")
+    if resp.status_code >= 400:
+        raise TrackerError(f"C411 mark-read : HTTP {resp.status_code}")
+
+
+@dataclass
+class EditResult:
+    success: bool
+    message: str
+    modified_fields: list[str]
+    set_to_pending: bool
+
+
+def edit_torrent(
+    session_cookie: str,
+    info_hash: str,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    description_format: str = "standard",
+    options: dict | None = None,
+) -> EditResult:
+    """PATCH /api/torrents/{infoHash}. Pour resoumettre après rejet.
+
+    Champs acceptés par le serveur : title, description, descriptionFormat
+    ('standard'|'html'), options. Toute autre clé est rejetée.
+    `descriptionFormat='standard'` accepte du BBCode (le serveur le rend en
+    HTML côté affichage).
+    """
+    if not session_cookie:
+        raise AuthError("C411 edit : session web requise.")
+    if not info_hash:
+        raise TrackerError("C411 edit : info_hash manquant.")
+
+    payload: dict = {"descriptionFormat": description_format}
+    if title is not None:
+        payload["title"] = title
+    if description is not None:
+        payload["description"] = description
+    if options is not None:
+        payload["options"] = options
+
+    cookies = {SESSION_COOKIE_NAME: session_cookie}
+    try:
+        with make_client(base_url=WEB_BASE, cookies=cookies) as client:
+            csrf = _fetch_csrf_token(client)
+            resp = client.patch(
+                f"/api/torrents/{info_hash}",
+                json=payload,
+                headers={"csrf-token": csrf, "Referer": f"{WEB_BASE}/", "Content-Type": "application/json"},
+            )
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+
+    if resp.status_code in (401, 403):
+        msg = _extract_error_msg(resp, default="session/CSRF refusé")
+        raise AuthError(f"C411 edit : {msg}")
+    if resp.status_code >= 400:
+        msg = _extract_error_msg(resp, default=f"HTTP {resp.status_code}")
+        raise TrackerError(f"C411 edit : {msg}")
+    try:
+        data = resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 edit : JSON invalide ({e})") from e
+
+    return EditResult(
+        success=bool(data.get("success")),
+        message=str(data.get("message") or ""),
+        modified_fields=list(data.get("modifiedFields") or []),
+        set_to_pending=bool(data.get("setToPending")),
+    )
+
+
+def resubmit_torrent(session_cookie: str, info_hash: str) -> str:
+    """POST /api/torrents/{hash}/resubmit — renvoie le torrent à la validation.
+
+    À appeler après un `edit_torrent` réussi : sans cet appel le torrent reste
+    en `revision_requested`. Retourne le message du serveur.
+    """
+    if not session_cookie:
+        raise AuthError("C411 resubmit : session web requise.")
+    if not info_hash:
+        raise TrackerError("C411 resubmit : info_hash manquant.")
+    cookies = {SESSION_COOKIE_NAME: session_cookie}
+    try:
+        with make_client(base_url=WEB_BASE, cookies=cookies) as client:
+            csrf = _fetch_csrf_token(client)
+            resp = client.post(
+                f"/api/torrents/{info_hash}/resubmit",
+                json={},
+                headers={"csrf-token": csrf, "Referer": f"{WEB_BASE}/", "Content-Type": "application/json"},
+            )
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 resubmit : session/CSRF refusé.")
+    if resp.status_code >= 400:
+        msg = _extract_error_msg(resp, default=f"HTTP {resp.status_code}")
+        raise TrackerError(f"C411 resubmit : {msg}")
+    try:
+        return str(resp.json().get("message") or "Renvoyé à validation.")
+    except (json.JSONDecodeError, ValueError):
+        return "Renvoyé à validation."
+
+
+def fetch_torrent(session_cookie: str, info_hash: str) -> dict:
+    """GET /api/torrents/{hash} — utile pour vérifier statut + options en place."""
+    cookies = {SESSION_COOKIE_NAME: session_cookie} if session_cookie else {}
+    try:
+        with make_client(base_url=WEB_BASE, cookies=cookies) as client:
+            resp = client.get(f"/api/torrents/{info_hash}")
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+    if resp.status_code == 404:
+        raise TrackerError("C411 : torrent introuvable.")
+    if resp.status_code != 200:
+        raise TrackerError(f"C411 /api/torrents/{info_hash} : HTTP {resp.status_code}")
+    try:
+        return resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 : JSON torrent invalide ({e})") from e
+
+
 def validate_api_key(api_key: str) -> Profile:
     """Valide un Bearer API key en pingant un endpoint qui exige le scope upload.
 

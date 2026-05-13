@@ -217,6 +217,13 @@ def render_dashboard(dash) -> RenderableType:
         chip.append("queue", style=f"bold {ACCENT}")
         chip.append(f"  ⏳ {pending}", style=WARN)
         chips.append(chip)
+    # Badge rejets C411 : N torrents en attente de correction
+    n_rej = len(dash.c411.rejections)
+    if n_rej:
+        chip = Text()
+        chip.append("rejets", style=f"bold {ACCENT}")
+        chip.append(f"  🚨 {n_rej}", style=ERROR)
+        chips.append(chip)
     stat_line = Text()
     for i, c in enumerate(chips):
         if i:
@@ -250,6 +257,38 @@ def render_dashboard(dash) -> RenderableType:
         parts.append(Text(""))
         parts.append(Align.center(header))
         parts.append(Align.center(table))
+
+    # Section rejets C411 (si présents)
+    if dash.c411.rejections:
+        rej_table = Table.grid(padding=(0, 2))
+        rej_table.add_column(width=2)
+        rej_table.add_column(no_wrap=True)  # titre
+        rej_table.add_column(no_wrap=True)  # raison head
+        rej_table.add_column(style=MUTED, justify="right", no_wrap=True)  # age
+        for r in dash.c411.rejections[:5]:
+            title = r.torrent_name or "?"
+            if len(title) > 50:
+                title = title[:49] + "…"
+            # Première ligne utile de la raison (ignore le greeting)
+            reason_lines = [l.strip() for l in (r.reason or "").split("\n") if l.strip()]
+            reason_head = ""
+            for l in reason_lines:
+                if l.startswith("1.") or "à corriger" in l.lower() or "raison" in l.lower():
+                    reason_head = l
+                    break
+            if not reason_head and reason_lines:
+                reason_head = reason_lines[0]
+            if len(reason_head) > 60:
+                reason_head = reason_head[:59] + "…"
+            rej_table.add_row(
+                Text("🚨", style=ERROR),
+                Text(title, style=ERROR),
+                Text(reason_head, style=MUTED),
+                Text(_fmt_age(r.created_at), style=MUTED),
+            )
+        parts.append(Text(""))
+        parts.append(Align.center(Text("Rejets C411 — à corriger et resoumettre", style=f"bold {ERROR}")))
+        parts.append(Align.center(rej_table))
 
     # Erreurs visibles (si un tracker a échoué malgré config OK)
     errors = []

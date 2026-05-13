@@ -7,6 +7,7 @@ from trackr.config import load_config
 from trackr.flows import configure as configure_flow
 from trackr.flows import inspect as inspect_flow
 from trackr.flows import movie as movie_flow
+from trackr.flows import rejection as rejection_flow
 from trackr.flows import retry as retry_flow
 
 app = typer.Typer(
@@ -61,6 +62,16 @@ def _main_menu() -> str | None:
                 value="retry",
             )
         )
+    # Entrée rejets C411 — conditionnée à la présence de rejets dans le cache dashboard
+    dash = dashboard_mod.get(load_config())
+    n_rej = len(dash.c411.rejections)
+    if n_rej:
+        choices.append(
+            questionary.Choice(
+                f"🚨  Résoudre les rejets C411 ({n_rej})",
+                value="rejection",
+            )
+        )
     choices += [
         questionary.Choice("🔍  Inspecter un fichier (mediainfo)", value="inspect"),
         questionary.Choice("⚙️   Configuration", value="configure"),
@@ -95,6 +106,9 @@ def _loop() -> None:
             _upload_menu()
         elif action == "retry":
             retry_flow.run()
+        elif action == "rejection":
+            rejection_flow.run()
+            dashboard_mod.invalidate()  # rafraîchir après actions
         elif action == "inspect":
             inspect_flow.run()
         elif action == "configure":
