@@ -252,6 +252,9 @@ def _process_rejection(r: c411_api.Rejection, cfg: Config) -> None:
                 f"Champs modifiés : {modified}\n✓ {resubmit_msg}",
             )
         )
+        # Track le torrent en pending validation pour qu'il apparaisse dans le dashboard.
+        from trackr import pending as pending_mod
+        pending_mod.add("c411", r.info_hash, new_title)
         _mark_read(r, cfg)
     else:
         ui.console.print(ui.error_panel("Réponse C411 inattendue", res.message or "—"))

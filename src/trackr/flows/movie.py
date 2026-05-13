@@ -297,11 +297,17 @@ def run() -> None:
         return
 
     # 13. POST séquentiel + download du .torrent re-signé par le tracker
+    from trackr import pending as pending_mod
+
     results: list[PostResult] = []
     for plan in plans:
         result = _post_plan(plan, cfg, hit)
         if result.ok and plan.torrent_path:
             _fetch_tracker_torrent(plan, result, cfg)
+            # Tracking C411 : list_my_uploads ne retourne pas les pending,
+            # on les garde localement pour les afficher dans le dashboard.
+            if plan.name == "c411" and result.info_hash:
+                pending_mod.add("c411", result.info_hash, plan.title)
         results.append(result)
         _print_post_result(result)
 

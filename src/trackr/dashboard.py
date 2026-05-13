@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
+from trackr import pending as pending_mod
 from trackr import qbittorrent as qbt
 from trackr.config import Config
 from trackr.trackers import c411 as c411_api
@@ -137,7 +138,56 @@ def _fetch_c411(cfg: Config) -> TrackerSnapshot:
             snap.rejections = c411_api.list_rejections(cfg.c411_session)
         except (AuthError, TrackerError):
             pass  # best-effort
+    # Pending validation : poll les info_hash tracked localement.
+    # list_my_uploads ne renvoie que les approved → on garde la liste à jour ici.
+    _resolve_c411_pending(cfg, snap)
     return snap
+
+
+def _resolve_c411_pending(cfg: Config, snap: TrackerSnapshot) -> None:
+    """Pour chaque pending tracked localement, ping le serveur et nettoie si validé."""
+    pendings = pending_mod.list_for("c411")
+    if not pendings:
+        return
+    still_pending: list[dict] = []
+    for p in pendings:
+        try:
+            t = c411_api.fetch_torrent(cfg.c411_session, p.info_hash)
+            status = (t.get("status") or "").lower()
+            if status in ("approved", "active"):
+                pending_mod.remove(p.info_hash)  # désormais visible via list_my_uploads
+                continue
+            if status == "revision_requested":
+                pending_mod.remove(p.info_hash)  # bascule dans le système de rejets
+                continue
+            # status == "pending" ou autre → toujours en attente
+            still_pending.append({
+                "title": p.title,
+                "status": "pending",
+                "info_hash": p.info_hash,
+                "created_at": p.posted_at,
+                "id": 0,
+            })
+        except TrackerError:
+            # 404 = pas encore visible côté tracker → toujours pending
+            still_pending.append({
+                "title": p.title,
+                "status": "pending",
+                "info_hash": p.info_hash,
+                "created_at": p.posted_at,
+                "id": 0,
+            })
+        except AuthError:
+            # Session expirée → on ne touche pas au cache local
+            still_pending.append({
+                "title": p.title,
+                "status": "pending",
+                "info_hash": p.info_hash,
+                "created_at": p.posted_at,
+                "id": 0,
+            })
+    # Préfixe la liste uploads : pending d'abord (plus pertinent pour l'user).
+    snap.uploads = still_pending + snap.uploads
 
 
 def _fetch_torr9(cfg: Config) -> TrackerSnapshot:
