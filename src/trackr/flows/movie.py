@@ -27,6 +27,8 @@ from trackr.nfo.builder import (
     detect_source_tag,
     detect_team_tag,
     has_encoding_settings,
+    has_fr_audio,
+    has_fr_subs,
     slugify,
     suggest_title_c411,
 )
@@ -451,14 +453,27 @@ def _ask_vod_platform() -> str:
 
 def _ask_language_tag(path: Path, info: MediaInfo) -> str:
     detected = detect_language_tag(path, info)
+    # Garde-fou C411 : pas de piste FR + pas de sous-titres FR = upload interdit.
+    if not has_fr_audio(info) and not has_fr_subs(info):
+        ui.console.print(
+            ui.warn_panel(
+                "Upload C411 problématique",
+                "Aucune piste audio FR ni sous-titres FR détectés. C411 exige "
+                "des sous-titres FR complets pour les fichiers sans piste FR — "
+                "sinon l'upload sera rejeté.\n\n"
+                "[italic]Tu peux continuer si tu sais que des sous-titres FR "
+                "complets sont présents (parfois non taggés dans mediainfo).[/italic]",
+            )
+        )
     choices = [
         questionary.Choice("VFF (vraie French, France)", value="VFF"),
         questionary.Choice("VFQ (Québec)", value="VFQ"),
         questionary.Choice("VF2 (French alternatif)", value="VF2"),
         questionary.Choice("VFI (international)", value="VFI"),
         questionary.Choice("VOF (Version Originale Française)", value="VOF"),
-        questionary.Choice("VOSTFR (VO + sous-titres FR)", value="VOSTFR"),
-        questionary.Choice("VO (Version Originale)", value="VO"),
+        questionary.Choice("VOSTFR (subs officiels)", value="VOSTFR"),
+        questionary.Choice("VOSTFR.FANSUB (subs de fans)", value="VOSTFR.FANSUB"),
+        questionary.Choice("VOSTFR.FASTSUB (subs rapides, qualité moindre)", value="VOSTFR.FASTSUB"),
         questionary.Choice("MULTi.VFF (multi-pistes avec FR)", value="MULTi.VFF"),
         questionary.Choice("MULTi.VOF", value="MULTi.VOF"),
         questionary.Choice("MULTi.VFQ", value="MULTi.VFQ"),

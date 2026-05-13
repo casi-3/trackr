@@ -137,6 +137,8 @@ def channels_tag(channels: str | int) -> str:
 
 
 _LANG_RX = re.compile(
+    # Matches `VOSTFR.FANSUB` / `VOSTFR.FASTSUB` en premier (la suite est un suffixe optionnel)
+    r"\bVOSTFR\.(FANSUB|FASTSUB)\b|"
     r"\b(MULTi|MULTI)\.(VFF|VOF|VFQ|VFI|VF2|VOSTFR)\b|"
     r"\b(VFF|VOF|VFQ|VFI|VF2|VOSTFR|TRUEFRENCH|FRENCH|VOQ|VO)\b|"
     r"\b(MULTi|MULTI)\b",
@@ -145,9 +147,18 @@ _LANG_RX = re.compile(
 
 
 def detect_language_tag(file_path: Path, info: MediaInfo) -> str:
-    """Devine le tag de langue scene-style depuis le nom de fichier puis les pistes audio."""
+    """Devine le tag de langue scene-style depuis le nom de fichier puis les pistes audio.
+
+    Note C411 : un fichier sans piste audio FR n'a le droit d'être publié que
+    s'il a des sous-titres FR complets — il devient alors VOSTFR. Sans subs
+    FR, l'upload est interdit (cf. wiki C411 / Sous-titres / Langue).
+    Cette fonction renvoie quand même `VO` dans ce cas — c'est au caller de
+    bloquer / avertir l'utilisateur.
+    """
     m = _LANG_RX.search(file_path.name)
     if m:
+        # `VOSTFR.FANSUB` / `VOSTFR.FASTSUB` doivent rester en majuscules pour
+        # le tag, on les force ici quel que soit la casse d'origine du filename.
         raw = m.group(0).upper().replace("MULTI", "MULTi")
         return raw
     fr_audio = [a for a in info.audio if (a.language or "").lower().startswith("fr")]
@@ -160,6 +171,14 @@ def detect_language_tag(file_path: Path, info: MediaInfo) -> str:
     if fr_subs:
         return "VOSTFR"
     return "VO"
+
+
+def has_fr_audio(info: MediaInfo) -> bool:
+    return any((a.language or "").lower().startswith("fr") for a in info.audio)
+
+
+def has_fr_subs(info: MediaInfo) -> bool:
+    return any((s.language or "").lower().startswith("fr") for s in info.subtitles)
 
 
 _SOURCE_RX = re.compile(
