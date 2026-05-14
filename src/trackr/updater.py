@@ -28,6 +28,7 @@ from pathlib import Path
 import httpx
 
 from trackr import __version__
+from trackr.http import make_client
 
 GITHUB_API = "https://api.github.com/repos/casi-3/trackr/releases/latest"
 GITHUB_RELEASES_URL = "https://github.com/casi-3/trackr/releases/latest"
@@ -101,11 +102,11 @@ def detect_install_mode() -> str:
 def fetch_latest_release(timeout: float = 3.0) -> UpdateInfo | None:
     """Renvoie l'info de la release la plus récente, ou None en cas d'erreur réseau."""
     try:
-        with httpx.Client(
-            timeout=timeout,
-            headers={"User-Agent": f"trackr/{__version__}", "Accept": "application/vnd.github+json"},
+        with make_client(
+            user_agent=f"trackr/{__version__}",
         ) as c:
-            r = c.get(GITHUB_API)
+            c.timeout = httpx.Timeout(timeout, connect=min(timeout, 5.0))
+            r = c.get(GITHUB_API, headers={"Accept": "application/vnd.github+json"})
     except httpx.HTTPError:
         return None
     if r.status_code != 200:
@@ -152,7 +153,8 @@ class UpdateError(RuntimeError):
 
 def _download_to(url: str, dest: Path, timeout: float = 60.0) -> None:
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=True, headers={"User-Agent": f"trackr/{__version__}"}) as c:
+        with make_client(user_agent=f"trackr/{__version__}") as c:
+            c.timeout = httpx.Timeout(timeout, connect=min(timeout, 10.0))
             with c.stream("GET", url) as r:
                 if r.status_code != 200:
                     raise UpdateError(f"download HTTP {r.status_code}")

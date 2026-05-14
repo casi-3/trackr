@@ -35,6 +35,8 @@ class Config:
     qbt_username: str = ""
     qbt_password: str = ""
     qbt_sid_cookie: str = ""  # cache du cookie de session (mode login)
+    # Réseau / Proxy
+    proxy_url: str = ""  # ex: socks5://user:pass@host:1080 ou http://host:8080
     # Common
     default_screen_host: str = "ask"
 
