@@ -530,3 +530,141 @@ def slugify(text: str, *, max_len: int = 60) -> str:
     s = _strip_accents(text or "").lower()
     s = _SLUG_RX.sub("-", s).strip("-")
     return s[:max_len] or "untitled"
+
+
+# ─────────────────────── Jeux Vidéo (C411 cat=5) ───────────────────────
+
+
+def build_game_title_c411(
+    *,
+    console_tag: str,
+    name: str,
+    region: str,
+    language: str,
+    container: str,
+    version: str = "",
+) -> str:
+    """Construit `[CONSOLE] Nom [v.X] [Region - Lang] Conteneur`.
+
+    Dédoublonne le tag console si l'user l'a déjà mis. Strip les accents (règle
+    C411 globale : pas d'accents dans les noms de torrents).
+    """
+    name = _strip_accents(name or "").strip()
+    # Retire un tag console éventuel en début (`[XBOX360]`, `[XBOX]`…) pour le re-préfixer proprement
+    name = re.sub(r"^\s*\[(XBOX(360|ONE|SX)?|XONE|XSX)\]\s*", "", name, flags=re.IGNORECASE)
+    tag = console_tag.strip()
+    version_part = f" {version.strip()}" if version.strip() else ""
+    region = region.strip().upper()
+    language = language.strip().upper()
+    container = container.strip().upper()
+    return f"{tag} {name}{version_part} [{region} - {language}] {container}".strip()
+
+
+def build_game_description_bbcode(
+    *,
+    presentation: str,
+    screenshots: list[str],
+    config_min: str = "",
+    install_notes: str = "",
+    dl_notes: str = "",
+    is_fullset: bool = False,
+) -> str:
+    """Description BBCode dans l'ordre wiki :
+    présentation (cover + infos RAWG) → screenshots → config → install → DL → footer.
+    """
+    parts: list[str] = []
+    if presentation.strip():
+        parts.append(presentation.strip())
+
+    needed = 4 if is_fullset else 3
+    shots = [s.strip() for s in (screenshots or []) if s.strip()]
+    if shots:
+        parts.append("[center][b]Aperçus[/b][/center]")
+        # Une image par ligne, centrée, BBCode universel
+        block = "\n".join(f"[center][img]{u}[/img][/center]" for u in shots[:max(needed, len(shots))])
+        parts.append(block)
+
+    if config_min.strip():
+        parts.append("[b]Configuration / Compatibilité[/b]\n" + config_min.strip())
+    if install_notes.strip():
+        parts.append("[b]Installation[/b]\n" + install_notes.strip())
+    if dl_notes.strip():
+        parts.append("[b]Notes téléchargement[/b]\n" + dl_notes.strip())
+
+    # Footer : [size=10] = petit en pt absolu (10pt). Plus universel que
+    # [size=85] qui est interprété en pourcentage par certains parsers
+    # (Torr9 OK) mais en pt absolu par d'autres (C411 → texte géant).
+    parts.append(
+        "[center][size=10][i]Uploadé via "
+        "[url=https://github.com/casi-3/trackr]Trackr[/url]"
+        "[/i][/size][/center]"
+    )
+    return "\n\n".join(parts)
+
+
+def build_game_nfo_c411(
+    *,
+    name: str,
+    platform: str,
+    publisher: str = "",
+    developer: str = "",
+    genre: str = "",
+    release_date: str = "",
+    region: str = "",
+    language: str = "",
+    container: str = "",
+    file_count: int = 0,
+    total_size: int = 0,
+    synopsis: str = "",
+    config_required: str = "",
+    install: str = "",
+    note: str = "",
+) -> str:
+    """NFO C411 jeu vidéo — ordre wiki.
+
+    Nom → Plateforme/Editeur/Dev/Genre/Date/Région/Langue/Format/Nb fichiers →
+    synopsis → config requise → install → (optionnel) note.
+    """
+    lines: list[str] = []
+    lines.append(f"Nom         : {name}")
+    lines.append(f"Plateforme  : {platform}")
+    if publisher:
+        lines.append(f"Editeur     : {publisher}")
+    if developer:
+        lines.append(f"Développeur : {developer}")
+    if genre:
+        lines.append(f"Genre       : {genre}")
+    if release_date:
+        lines.append(f"Date        : {release_date}")
+    if region:
+        lines.append(f"Région      : {region}")
+    if language:
+        lines.append(f"Langue      : {language}")
+    if container:
+        lines.append(f"Format      : {container}")
+    if file_count:
+        lines.append(f"Nb fichiers : {file_count}")
+    if total_size:
+        lines.append(f"Poids total : {_size_with_bytes(total_size)}")
+
+    if synopsis.strip():
+        lines.append("")
+        lines.append("── Synopsis ───────────────────────────────────────────")
+        lines.append(synopsis.strip())
+
+    if config_required.strip():
+        lines.append("")
+        lines.append("── Configuration requise ──────────────────────────────")
+        lines.append(config_required.strip())
+
+    if install.strip():
+        lines.append("")
+        lines.append("── Installation ───────────────────────────────────────")
+        lines.append(install.strip())
+
+    if note.strip():
+        lines.append("")
+        lines.append("── Note ───────────────────────────────────────────────")
+        lines.append(note.strip())
+
+    return "\n".join(lines) + "\n"

@@ -428,6 +428,7 @@ def upload(
     tmdb_type: str = "movie",
     imdb_id: str = "",
     year: str = "",
+    rawg_data: dict | None = None,
     description_format: str = "standard",
     custom_poster_url: str = "",
     is_exclusive: bool = False,
@@ -438,16 +439,11 @@ def upload(
 
     `options` est un dict `{option_id: value_id | [value_id]}` selon que
     l'option accepte multi ou non. Ex : `{1: [2], 5: [49, 50]}`.
+
+    Pour un film/série : passer `tmdb_id`/`tmdb_type`/`year` (→ `tmdbData`).
+    Pour un jeu vidéo  : passer `rawg_data` (objet RAWG complet) → `rawgData`.
     """
     import json as _json
-
-    tmdb_data = {
-        "tmdbId": tmdb_id or None,
-        "tmdbType": tmdb_type or None,
-        "imdbId": imdb_id or None,
-        "title": title,
-        "year": year or None,
-    }
 
     files = {
         "torrent": (torrent_path.name, torrent_path.read_bytes(), "application/x-bittorrent"),
@@ -460,12 +456,22 @@ def upload(
         "description": description,
         "descriptionFormat": description_format,
         "options": _json.dumps(options),
-        "tmdbData": _json.dumps(tmdb_data),
         "customPosterUrl": custom_poster_url or "",
         "isExclusive": "true" if is_exclusive else "false",
         "uploaderNote": uploader_note or "",
         "bypassedWarnings": _json.dumps(bypassed_warnings or []),
     }
+    if rawg_data is not None:
+        data["rawgData"] = _json.dumps(rawg_data)
+    else:
+        tmdb_data = {
+            "tmdbId": tmdb_id or None,
+            "tmdbType": tmdb_type or None,
+            "imdbId": imdb_id or None,
+            "title": title,
+            "year": year or None,
+        }
+        data["tmdbData"] = _json.dumps(tmdb_data)
     try:
         with make_client(base_url=WEB_BASE) as client:
             resp = client.post(
@@ -843,3 +849,129 @@ def validate_api_key(api_key: str) -> Profile:
         raise TrackerError(f"C411 /api/user/drafts : HTTP {resp.status_code}")
 
     return Profile()
+
+
+# ───────────────────────────── RAWG (jeux vidéo) ─────────────────────────────
+
+
+@dataclass
+class RawgResult:
+    rawg_id: int
+    slug: str
+    title: str
+    year: str
+    image_url: str
+    genres: tuple[str, ...]
+    platforms: tuple[str, ...]
+    raw: dict
+
+
+def rawg_search(session_cookie: str, query: str, *, limit: int = 8) -> list[RawgResult]:
+    """GET /api/rawg/search?q=... — recherche RAWG via le wrapper C411.
+
+    Requiert la session web (le Bearer ne fonctionne pas sur cet endpoint).
+    Renvoie au plus `limit` résultats.
+    """
+    if not session_cookie:
+        raise AuthError("C411 RAWG : session web requise (mode Guidé).")
+    q = (query or "").strip()
+    if not q:
+        return []
+    cookies = {SESSION_COOKIE_NAME: session_cookie}
+    try:
+        with make_client(base_url=WEB_BASE, cookies=cookies) as client:
+            resp = client.get("/api/rawg/search", params={"q": q})
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 RAWG search : session expirée — relance la config C411 (mode Guidé).")
+    if resp.status_code != 200:
+        raise TrackerError(f"C411 RAWG search : HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 RAWG search : JSON invalide ({e})") from e
+
+    body = payload.get("data") or payload
+    results = body.get("results") if isinstance(body, dict) else None
+    out: list[RawgResult] = []
+    for item in (results or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            RawgResult(
+                rawg_id=int(item.get("id") or 0),
+                slug=str(item.get("slug") or ""),
+                title=str(item.get("title") or item.get("name") or "?"),
+                year=str(item.get("year") or ""),
+                image_url=str(item.get("imageUrl") or item.get("backgroundUrl") or ""),
+                genres=tuple(str(g) for g in (item.get("genres") or []) if isinstance(g, str)),
+                platforms=tuple(str(p) for p in (item.get("platforms") or []) if isinstance(p, str)),
+                raw=item,
+            )
+        )
+    return out
+
+
+@dataclass
+class RawgLookup:
+    game: dict                   # objet RAWG complet à renvoyer en `rawgData`
+    presentation_html: str       # rendu HTML prêt à envoyer en descriptionFormat=html
+    presentation_text: str       # version texte brut (sans markup)
+    genre_option_ids: list[int]  # IDs option C411 à pré-cocher (option id 5 "genre")
+
+    @property
+    def presentation(self) -> str:
+        """Compat : retourne le HTML par défaut."""
+        return self.presentation_html
+
+
+def rawg_lookup(session_cookie: str, rawg_id: int, *, presentation: bool = True) -> RawgLookup:
+    """GET /api/rawg/lookup?id=X&presentation=true — détail RAWG + BBCode + genres mappés."""
+    if not session_cookie:
+        raise AuthError("C411 RAWG : session web requise (mode Guidé).")
+    if not rawg_id:
+        raise TrackerError("C411 RAWG lookup : id manquant")
+    cookies = {SESSION_COOKIE_NAME: session_cookie}
+    params = {"id": str(rawg_id)}
+    if presentation:
+        params["presentation"] = "true"
+    try:
+        with make_client(base_url=WEB_BASE, cookies=cookies) as client:
+            resp = client.get("/api/rawg/lookup", params=params)
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 RAWG lookup : session expirée — relance la config C411 (mode Guidé).")
+    if resp.status_code == 404:
+        raise TrackerError(f"C411 RAWG lookup : jeu id={rawg_id} introuvable")
+    if resp.status_code != 200:
+        raise TrackerError(f"C411 RAWG lookup : HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 RAWG lookup : JSON invalide ({e})") from e
+
+    body = payload.get("data") or payload
+    game = body.get("game") if isinstance(body, dict) else None
+    if not isinstance(game, dict):
+        raise TrackerError("C411 RAWG lookup : structure inattendue")
+    pres_raw = body.get("presentation") if isinstance(body, dict) else None
+    if isinstance(pres_raw, dict):
+        pres_html = str(pres_raw.get("html") or "")
+        pres_text = str(pres_raw.get("plainText") or pres_raw.get("text") or "")
+    elif isinstance(pres_raw, str):
+        pres_html = pres_raw
+        pres_text = ""
+    else:
+        pres_html = ""
+        pres_text = ""
+    raw_genres = body.get("genreOptionIds") if isinstance(body, dict) else []
+    return RawgLookup(
+        game=game,
+        presentation_html=pres_html,
+        presentation_text=pres_text,
+        genre_option_ids=[int(g) for g in (raw_genres or []) if str(g).isdigit() or isinstance(g, int)],
+    )

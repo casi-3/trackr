@@ -7,6 +7,7 @@ from trackr.config import load_config
 from trackr.flows import configure as configure_flow
 from trackr.flows import delete as delete_flow
 from trackr.flows import inspect as inspect_flow
+from trackr.flows import game as game_flow
 from trackr.flows import movie as movie_flow
 from trackr.flows import rejection as rejection_flow
 from trackr.flows import retry as retry_flow
@@ -85,17 +86,64 @@ def _main_menu() -> str | None:
 
 
 def _upload_menu() -> None:
+    while True:
+        ui.clear()
+        category = questionary.select(
+            "Pour quelle catégorie ?",
+            choices=[
+                questionary.Choice("🎬  Films & Vidéos", value="movies"),
+                questionary.Choice("🎮  Jeux Vidéo", value="games"),
+                questionary.Choice("← Retour", value="back"),
+            ],
+        ).ask()
+        if category in (None, "back"):
+            return
+        if category == "movies":
+            if _movies_submenu():
+                return
+        elif category == "games":
+            if _games_submenu():
+                return
+
+
+def _movies_submenu() -> bool:
+    """Renvoie True si un flow a été lancé (→ remonter au menu principal)."""
     ui.clear()
     choice = questionary.select(
-        "Que veux-tu uploader ?",
+        "Type :",
         choices=[
             questionary.Choice("🎬  Un film", value="movie"),
             questionary.Choice("📺  Une série  [bientôt]", value="series", disabled="à venir"),
             questionary.Choice("← Retour", value="back"),
         ],
     ).ask()
+    if choice in (None, "back"):
+        return False
     if choice == "movie":
         movie_flow.run()
+        return True
+    return False
+
+
+def _games_submenu() -> bool:
+    """Renvoie True si un flow a été lancé (→ remonter au menu principal)."""
+    ui.clear()
+    choice = questionary.select(
+        "Plateforme :",
+        choices=[
+            questionary.Choice("🎮  Microsoft (Xbox / 360 / One / SX)", value="microsoft"),
+            questionary.Choice("🎮  Sony (PS3 / PS4 / PS5)  [bientôt]", value="sony", disabled="à venir"),
+            questionary.Choice("🎮  Nintendo (Switch / Wii / 3DS)  [bientôt]", value="nintendo", disabled="à venir"),
+            questionary.Choice("💻  PC (Windows / Linux / MacOS)  [bientôt]", value="pc", disabled="à venir"),
+            questionary.Choice("← Retour", value="back"),
+        ],
+    ).ask()
+    if choice in (None, "back"):
+        return False
+    if choice == "microsoft":
+        game_flow.run()
+        return True
+    return False
 
 
 def _check_update_blocking() -> None:
