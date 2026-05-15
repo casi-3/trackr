@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 
 import questionary
+from prompt_toolkit.formatted_text import FormattedText
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
@@ -49,10 +50,10 @@ from trackr.trackers.c411 import QuotaError
 
 # Mapping langue choisie → slugs C411 (option_id=1, cat=5).
 LANGUAGE_OPTION_HINTS = {
-    "FR":    ("vff", "vff-uniquement", "francais-uniquement", "francais"),
+    "FR":    ("francais-vff-truefrench", "vff", "truefrench", "francais"),
     "EN":    ("anglais", "vo-anglais", "vo"),
     "JP":    ("japonais", "vo-japonais"),
-    "MULTI": ("multi-francais-inclus", "multi", "multi-langue"),
+    "MULTI": ("multi-francais-inclus", "multi"),
 }
 
 
@@ -137,17 +138,35 @@ def run() -> None:
             )
         )
 
-    # 2. Console / nom / conteneur / région / langue / version
+    # 2. Console + source (la source pré-remplit le nom et le conteneur)
     console = _ask_console()
     if console is None:
         return
-    name = questionary.text(
-        "Nom du jeu (sans tag console, sans région) :",
-        validate=lambda v: True if v.strip() else "Nom requis.",
-    ).ask()
-    if not name:
+    source_path = _ask_source_path()
+    if source_path is None:
         return
-    container = _ask_container(console)
+
+    guess_name = _guess_name_from_filename(source_path)
+    guess_container = _guess_container(source_path, console)
+
+    # 3. Nom / conteneur / région / langue / version
+    if guess_name:
+        name_in = questionary.text(
+            "Nom du jeu (sans tag console, sans région) :",
+            instruction="(Entrée = garder la proposition en gris, ou tape pour corriger)",
+            placeholder=FormattedText([("italic fg:ansibrightblack", guess_name)]),
+        ).ask()
+        if name_in is None:
+            return
+        name = name_in.strip() or guess_name
+    else:
+        name = questionary.text(
+            "Nom du jeu (sans tag console, sans région) :",
+            validate=lambda v: True if v.strip() else "Nom requis.",
+        ).ask()
+        if not name:
+            return
+    container = _ask_container(console, guess_container)
     if not container:
         return
     region = _ask_pick("Région :", GAME_REGIONS, default_key="PAL")
@@ -161,11 +180,6 @@ def run() -> None:
         default="",
     ).ask()
     if version is None:
-        return
-
-    # 3. Source : fichier ou dossier
-    source_path = _ask_source_path()
-    if source_path is None:
         return
 
     # 4. Recherche automatique de métadonnées (présentation + genres)
@@ -449,16 +463,21 @@ def _ask_console() -> ConsoleSpec | None:
     return questionary.select("Console :", choices=choices).ask()
 
 
-def _ask_container(console: ConsoleSpec) -> str:
+def _ask_container(console: ConsoleSpec, guess: str | None = None) -> str:
     if len(console.containers) == 1:
         c = console.containers[0]
         ui.console.print(f"[{ui.MUTED}]Conteneur imposé : [bold]{c}[/].[/]")
         return c
+    default_key = guess if guess in console.containers else console.containers[0]
+    if guess and guess in console.containers:
+        ui.console.print(
+            f"[{ui.MUTED}]Conteneur déduit du fichier : [bold]{guess}[/] (modifiable).[/]"
+        )
     choices = [questionary.Choice(c, value=c) for c in console.containers]
     return questionary.select(
         f"Conteneur pour {console.label} :",
         choices=choices,
-        default=console.containers[0],
+        default=default_key,
     ).ask() or ""
 
 
@@ -477,6 +496,53 @@ def _ask_source_path() -> Path | None:
         ui.press_enter()
         return None
     return p
+
+
+_TAG_GROUP_RE = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
+_SCENE_GROUP_RE = re.compile(r"-[A-Za-z0-9]{2,}$")
+_NOISE_TOKENS = {
+    "pal", "ntsc", "ntscu", "ntscj", "usa", "us", "eur", "europe", "jap", "jpn",
+    "japan", "jp", "multi", "multi2", "multi3", "multi4", "multi5", "multi6",
+    "multi7", "multi8", "multi9", "xbox", "xbox360", "x360", "xbla", "xboxone",
+    "xone", "xsx", "iso", "xvc", "jtag", "rgh", "god", "readnfo", "proper",
+    "repack", "dlc", "fr", "en", "de", "es", "it", "fra", "eng", "ger",
+}
+_EXT_TO_CONTAINER = {"iso": "ISO", "xvc": "XVC", "god": "GOD"}
+
+
+def _guess_name_from_filename(source_path: Path) -> str:
+    """Déduit un titre plausible depuis le nom du fichier/dossier.
+
+    Ex: 'Burnout Revenge (Europe) (En,Fr,De).iso' → 'Burnout Revenge'.
+    Volontairement conservateur : sert juste de proposition pré-remplie,
+    l'utilisateur corrige si le match n'est pas bon.
+    """
+    stem = source_path.stem if source_path.is_file() else source_path.name
+    s = stem
+    if " " not in s and ("." in s or "_" in s):
+        s = s.replace(".", " ").replace("_", " ")
+    else:
+        s = s.replace("_", " ")
+    s = _TAG_GROUP_RE.sub(" ", s)
+    s = _SCENE_GROUP_RE.sub("", s)
+    s = re.sub(r"\s+", " ", s).strip(" -_.")
+    words = s.split(" ")
+    kept: list[str] = []
+    for w in words:
+        if w.lower().strip(".,") in _NOISE_TOKENS:
+            break
+        kept.append(w)
+    return (" ".join(kept) or s).strip()
+
+
+def _guess_container(source_path: Path, console: ConsoleSpec) -> str | None:
+    """Conteneur déduit de l'extension du fichier, s'il est valide pour la console."""
+    if source_path.is_file():
+        ext = source_path.suffix.lower().lstrip(".")
+        guess = _EXT_TO_CONTAINER.get(ext)
+        if guess and guess in console.containers:
+            return guess
+    return None
 
 
 def _rawg_search_step(session_cookie: str, name: str) -> list[c411_api.RawgResult]:
@@ -815,19 +881,25 @@ def _match_value_by_label(values: list, wanted_labels: tuple) -> int | None:
 def _match_language_value(values: list, language: str):
     """Trouve l'ID de valeur correspondant à la langue choisie."""
     wanted = LANGUAGE_OPTION_HINTS.get(language.upper(), ())
-    # Match exact sur slug/value
+    if not wanted:
+        return None
+
+    def _vid(v):
+        vid = v.get("id") or v.get("value")
+        return int(vid) if str(vid).isdigit() else vid
+
+    # 1) Match exact sur le slug (déterministe, non ambigu)
     for v in values:
-        slug = str(v.get("slug") or v.get("value") or "").lower()
-        if slug in wanted:
-            vid = v.get("id") or v.get("value")
-            return int(vid) if str(vid).isdigit() else vid
-    # Substring sur label
-    if wanted:
-        for v in values:
-            label = str(v.get("label") or v.get("name") or "").lower()
-            if any(w in label for w in wanted):
-                vid = v.get("id") or v.get("value")
-                return int(vid) if str(vid).isdigit() else vid
+        slug = str(v.get("slug") or "").lower()
+        if slug and slug in wanted:
+            return _vid(v)
+    # 2) Repli : sous-chaîne sur slug + libellé (l'API n'expose que value/slug)
+    for v in values:
+        hay = " ".join(
+            str(v.get(k) or "") for k in ("slug", "value", "label", "name")
+        ).lower()
+        if any(w in hay for w in wanted):
+            return _vid(v)
     return None
 
 
