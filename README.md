@@ -16,8 +16,9 @@ Aucune donnée n'est collectée, aucune donnée n'est partagée.
 - Pas de télémétrie, pas d'analytics, pas de phone-home.
 - Aucun serveur appartenant à trackr — l'outil n'a pas de backend.
 - Les communications réseau vont uniquement vers les trackers configurés,
-  l'instance qBittorrent renseignée, et TMDB via les proxies des trackers
-  (aucune clé API TMDB à fournir).
+  l'instance qBittorrent renseignée, les bases TMDB et RAWG.io via les
+  proxies des trackers (aucune clé API à fournir), et — seulement si tu
+  l'actives pour les captures d'écran — l'hébergeur d'images Catbox.
 - Identifiants stockés en local via
   [`platformdirs`](https://pypi.org/project/platformdirs/) :
   - Linux : `~/.config/trackr/config.toml`
@@ -37,9 +38,17 @@ Aucune donnée n'est collectée, aucune donnée n'est partagée.
 - Génération du titre, NFO et description BBCode conformes aux règles de
   chaque tracker. Tableaux audio et sous-titres avec drapeaux par langue.
 - Recherche TMDB intégrée par titre ou ID, via les proxies des trackers.
+- Upload de jeux vidéo (consoles Microsoft : Xbox, 360, One, Series X|S).
+  Recherche RAWG.io pour la présentation, les genres, l'éditeur /
+  développeur et le titre commercial exact. Nom et conteneur pré-remplis
+  depuis le fichier source.
+- Captures d'écran récupérées automatiquement depuis RAWG (nombre au
+  choix) : liens directs ou réupload sur Catbox.
 - Création du `.torrent` avec progress bar et ETA.
 - Seed automatique dans qBittorrent (mode API key ou login, détection du
   mapping Docker).
+- Brouillons C411 : si le quota d'upload est atteint, repli automatique en
+  brouillon, puis publication ou suppression depuis le menu.
 - File de reprise pour les uploads partiellement échoués — on retente
   uniquement les trackers en erreur, sans régénérer le `.torrent`.
 - Mode batch pour enchaîner plusieurs uploads.
@@ -97,7 +106,8 @@ user/password.
    user/password et TOTP si activé).
 3. **Configuration → Client BitTorrent** → URL qBittorrent et méthode
    d'authentification.
-4. **Uploader un torrent** depuis le menu principal.
+4. **Uploader un torrent** ou **Uploader un jeu** depuis le menu
+   principal.
 
 ---
 
@@ -105,8 +115,8 @@ user/password.
 
 | Tracker | Upload | Download `.torrent` signé | Catégories |
 |---------|--------|--------------------------|------------|
-| C411    | ✓      | ✓ (via session web)      | Films & Vidéos |
-| Torr9   | ✓      | ✓ (via JWT)              | Films |
+| C411    | ✓      | ✓ (via session web)      | Films, Vidéos, Jeux vidéo (Microsoft) |
+| Torr9   | ✓      | ✓ (via JWT)              | Films, Jeux vidéo (Microsoft) |
 
 D'autres trackers et catégories pourront être ajoutés.
 
