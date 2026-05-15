@@ -23,6 +23,7 @@ from trackr import pending as pending_mod
 from trackr import qbittorrent as qbt
 from trackr import ui
 from trackr.config import Config, load_config, save_config
+from trackr.media import imagehost
 from trackr.media import torrent as torrent_mod
 from trackr.nfo.builder import (
     _size_with_bytes,
@@ -43,6 +44,7 @@ from trackr.trackers.c411_cats import (
     games_category,
 )
 from trackr.trackers.base import AuthError, TrackerError
+from trackr.trackers.c411 import QuotaError
 
 
 # Mapping langue choisie → slugs C411 (option_id=1, cat=5).
@@ -171,6 +173,7 @@ def run() -> None:
     presentation_html = ""
     presentation_bbcode = ""
     genre_option_ids: list[int] = []
+    rawg_screens: list[str] = []
     if auto_lookup_enabled:
         results: list[c411_api.RawgResult] = []
         try:
@@ -187,12 +190,18 @@ def run() -> None:
             return
         if rawg_choice != "_skip":
             time.sleep(0.3)
+            rawg_screens = list(rawg_choice.screenshots)
+            official_name = str(rawg_choice.title or "").strip()
             try:
                 lookup = c411_api.rawg_lookup(cfg.c411_session, rawg_choice.rawg_id, presentation=True)
                 rawg_data = lookup.game
                 presentation_html = lookup.presentation_html
                 presentation_bbcode = _html_to_bbcode(presentation_html)
                 genre_option_ids = lookup.genre_option_ids
+                official_name = (
+                    str(rawg_data.get("title") or rawg_data.get("name") or "").strip()
+                    or official_name
+                )
             except (AuthError, TrackerError):
                 ui.console.print(
                     ui.warn_panel(
@@ -200,9 +209,15 @@ def run() -> None:
                         "Continue sans présentation auto.",
                     )
                 )
+            if official_name and official_name != name:
+                ui.console.print(
+                    f"[{ui.MUTED}]Nom officiel retenu : [bold]{official_name}[/] "
+                    f"(saisi : « {name} »)[/]"
+                )
+                name = official_name
 
     # 5. Screenshots (commun)
-    screenshots = _ask_screenshots()
+    screenshots = _ask_screenshots(rawg_screens, cfg)
     if screenshots is None:
         return
 
@@ -370,23 +385,36 @@ def run() -> None:
         return
 
     # 18. POST séquentiel + DL du .torrent re-signé par chaque tracker
+    # Note : un torrent qui bascule en draft (status="draft") n'a pas encore
+    # été accepté par le tracker — pas de fetch du .torrent signé, pas de seed.
     results: list[PostResult] = []
     for plan in plans:
         if plan.tracker == "c411":
             r = _post_c411(plan, cfg)
         else:
             r = _post_torr9(plan, cfg)
-        if r.ok and plan.torrent_path:
+        if r.ok and plan.torrent_path and r.status != "draft":
             _fetch_tracker_torrent_game(plan, r, cfg)
         results.append(r)
         _print_post_result(r)
 
-    # 19. Tracking pending C411 (dashboard)
+    # 19. Tracking pending C411 (dashboard) — exclure les drafts (pas en pending serveur)
     for plan, res in zip(plans, results):
-        if plan.tracker == "c411" and res.ok and res.info_hash:
+        if plan.tracker == "c411" and res.ok and res.info_hash and res.status != "draft":
             pending_mod.add("c411", res.info_hash, plan.title)
 
-    # 20. Seed dans qBittorrent (si configuré + au moins un upload OK)
+    # 20. Seed dans qBittorrent — exclure les drafts (seed proposé à la publication ultérieure)
+    drafted = [p for p, r in zip(plans, results) if r.status == "draft"]
+    if drafted:
+        names = ", ".join(p.tracker.upper() for p in drafted)
+        ui.console.print(
+            ui.info_panel(
+                "Seed différé pour les brouillons",
+                f"{names} : le torrent est en brouillon, le seed sera proposé "
+                f"automatiquement quand tu publieras le brouillon depuis le menu "
+                f"[b]📝 Brouillons C411[/].",
+            )
+        )
     _offer_seed_game(plans, results, cfg, source_path)
 
     # 21. Récap
@@ -481,7 +509,99 @@ def _ask_rawg_choice(results: list[c411_api.RawgResult]):
     return questionary.select("Sélection du jeu :", choices=choices).ask()
 
 
-def _ask_screenshots() -> list[str] | None:
+def _ask_screenshots(rawg_screens: list[str], cfg: Config) -> list[str] | None:
+    if rawg_screens:
+        picked = _grab_rawg_screenshots(rawg_screens, cfg)
+        if picked is None:
+            return None
+        if picked:
+            return picked
+    return _ask_screenshots_manual()
+
+
+def _grab_rawg_screenshots(rawg_screens: list[str], cfg: Config) -> list[str] | None:
+    """Récupère des screenshots directement depuis RAWG.
+
+    Renvoie la liste finale, [] si l'user préfère la saisie manuelle,
+    None si annulation.
+    """
+    avail = len(rawg_screens)
+    ui.console.print(
+        ui.info_panel(
+            "Screenshots RAWG",
+            f"{avail} capture(s) disponible(s) directement depuis RAWG.",
+        )
+    )
+    if not questionary.confirm(
+        "Récupérer les screenshots automatiquement depuis RAWG ?", default=True
+    ).ask():
+        return []
+
+    default_n = min(3, avail)
+    raw_n = questionary.text(
+        f"Combien de screenshots ? (1–{avail}, défaut {default_n})",
+        default=str(default_n),
+    ).ask()
+    if raw_n is None:
+        return None
+    try:
+        n = int(str(raw_n).strip() or default_n)
+    except ValueError:
+        n = default_n
+    n = max(1, min(n, avail))
+    picked = rawg_screens[:n]
+
+    ui.console.print(f"\n[{ui.MUTED}]{n} screenshot(s) sélectionné(s) :[/]")
+    for i, u in enumerate(picked, 1):
+        ui.console.print(f"  [dim]{i}.[/] {u}")
+    ui.console.print()
+
+    # Mode d'hébergement : lien RAWG direct ou réupload vers un host.
+    mode = cfg.default_screen_host
+    if mode == "ask":
+        mode = questionary.select(
+            "Hébergement des screenshots :",
+            choices=[
+                questionary.Choice("Réuploader sur Catbox (recommandé)", value="catbox"),
+                questionary.Choice("Garder les liens RAWG directs", value="direct"),
+            ],
+        ).ask()
+        if mode is None:
+            return None
+
+    if mode in ("direct", "rawg"):
+        ui.console.print(f"[{ui.MUTED}]{n} lien(s) RAWG direct(s) utilisé(s).[/]")
+        return picked
+
+    host = "catbox" if mode not in ("catbox",) else mode
+    if mode not in ("catbox",):
+        ui.console.print(
+            f"[{ui.MUTED}]Réupload via Catbox (host « {mode} » non géré pour le réupload auto).[/]"
+        )
+
+    final: list[str] = []
+    n_fail = 0
+    with ui.console.status(
+        f"[cyan]Réupload de {n} screenshot(s) sur {host}…[/cyan]", spinner="dots"
+    ):
+        results = imagehost.rehost_many(picked, host=host)
+    for i, r in enumerate(results, 1):
+        final.append(r.url)
+        if r.rehosted:
+            ui.console.print(f"[{ui.SUCCESS}]✓[/] screenshot {i} → {r.url}")
+        else:
+            n_fail += 1
+            ui.console.print(
+                f"[{ui.WARN}]⚠[/] screenshot {i} : réupload échoué ({r.error}) — lien RAWG conservé"
+            )
+    if n_fail:
+        ui.console.print(
+            f"[{ui.WARN}]{n_fail}/{n} non réuploadé(s) — les liens RAWG d'origine sont utilisés.[/]"
+        )
+    return final
+
+
+def _ask_screenshots_manual() -> list[str] | None:
     ui.console.print(
         ui.info_panel(
             "Screenshots",
@@ -759,17 +879,85 @@ def _post_c411(plan: GamePlan, cfg: Config) -> PostResult:
                 category_id=plan.category_id,
                 subcategory_id=plan.subcategory_id,
                 description=plan.description,
-                description_format="standard",  # BBCode (C411 ne supporte pas html sur les jeux)
+                description_format="standard",
                 options=plan.options,
                 rawg_data=plan.rawg_data,
             )
     except AuthError as e:
         return PostResult("c411", False, f"Auth refusée : {e}")
+    except QuotaError as e:
+        # Quota d'uploads en attente atteint → fallback vers brouillon
+        return _fallback_to_draft(plan, cfg, nfo_path, str(e))
     except TrackerError as e:
         return PostResult("c411", False, f"Échec : {e}")
     url_hint = f"https://c411.org/torrent/{res.info_hash}" if res.info_hash else ""
     return PostResult("c411", True, res.message or "Envoyé.",
                       info_hash=res.info_hash, status=res.status, url_hint=url_hint)
+
+
+def _fallback_to_draft(plan: GamePlan, cfg: Config, nfo_path: Path, quota_msg: str) -> PostResult:
+    """Quand le POST upload renvoie 429 (quota pending atteint), sauve en brouillon.
+
+    L'user pourra reprendre via le menu Brouillons C411 quand un slot se libère.
+    """
+    ui.console.print()
+    ui.console.print(
+        ui.warn_panel(
+            "Quota d'uploads en attente atteint",
+            f"{quota_msg}\n\n"
+            f"[bold]Trackr va sauver ce torrent en [b]brouillon[/b] côté C411.[/]\n"
+            f"Tu pourras le publier depuis le menu [b]Brouillons C411[/] dès qu'un slot "
+            f"d'upload se libère (validation d'un autre torrent par la Team Pending).",
+        )
+    )
+    try:
+        with ui.console.status("[cyan]Sauvegarde du brouillon C411…[/cyan]", spinner="dots"):
+            draft = c411_api.create_draft(
+                cfg.c411_api_key,
+                torrent_path=plan.torrent_path,
+                nfo_path=nfo_path,
+                title=plan.title,
+                category_id=plan.category_id,
+                subcategory_id=plan.subcategory_id,
+                description=plan.description,
+                description_format="standard",
+                options=plan.options,
+                rawg_data=plan.rawg_data,
+            )
+    except QuotaError as e:
+        return PostResult("c411", False,
+                          f"Brouillon refusé : {e}\nLimite brouillons atteinte (15 max). "
+                          f"Supprime un brouillon existant depuis le menu Brouillons C411.")
+    except AuthError as e:
+        return PostResult("c411", False, f"Brouillon refusé (auth) : {e}")
+    except TrackerError as e:
+        return PostResult("c411", False, f"Brouillon échoué : {e}")
+    # Conserve le draft_id dans le manifest local pour permettre la reprise
+    # depuis le menu Brouillons (lookup cache_dir ↔ draft).
+    _attach_draft_id_to_manifest(plan, draft.id)
+    return PostResult(
+        "c411", True,
+        f"Sauvé en brouillon #{draft.id} — à publier depuis le menu Brouillons C411 quand un slot se libère.",
+        status="draft",
+        url_hint=f"https://c411.org/user/drafts",
+    )
+
+
+def _attach_draft_id_to_manifest(plan: GamePlan, draft_id: int) -> None:
+    """Met à jour le manifest.json du build pour y stocker le draft_id C411."""
+    if not plan.torrent_path:
+        return
+    manifest_path = plan.torrent_path.parent / "manifest.json"
+    if not manifest_path.exists():
+        return
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for p in data.get("plans", []):
+            if p.get("tracker") == "c411":
+                p["c411_draft_id"] = draft_id
+        manifest_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        pass
 
 
 def _post_torr9(plan: GamePlan, cfg: Config) -> PostResult:
@@ -1351,8 +1539,11 @@ def _offer_seed_game(
         _normalize_path,
     )
 
+    # Exclure les torrents passés en brouillon : pas encore accepté serveur,
+    # le seed sera proposé à la publication ultérieure depuis le menu Brouillons.
     ok_pairs: list[tuple[PostResult, GamePlan]] = [
-        (r, p) for r, p in zip(results, plans) if r.ok and p.torrent_path
+        (r, p) for r, p in zip(results, plans)
+        if r.ok and p.torrent_path and r.status != "draft"
     ]
     if not ok_pairs:
         return
@@ -1711,6 +1902,7 @@ def _write_manifest(
         "language": language,
         "container": container,
         "rawg_id": int(rawg_data.get("id") or 0) if isinstance(rawg_data, dict) else 0,
+        "rawg_data": rawg_data if isinstance(rawg_data, dict) else {},
         "source_path": str(source_path),
         "nfo_path": str(nfo_path),
         "desc_path": str(desc_path),

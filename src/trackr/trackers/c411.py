@@ -16,6 +16,15 @@ from trackr.trackers.base import (
     TrackerError,
 )
 
+
+class QuotaError(TrackerError):
+    """Levée quand le quota d'uploads en attente est dépassé (HTTP 429).
+
+    Permet au flow de proposer un fallback vers draft / brouillon plutôt que
+    de signaler une erreur définitive.
+    """
+    pass
+
 WEB_BASE = "https://c411.org"
 SESSION_COOKIE_NAME = "__Host-c411_session"
 CSRF_COOKIE_NAME = "__csrf"
@@ -486,6 +495,11 @@ def upload(
     if resp.status_code in (401, 403):
         msg = _extract_error_msg(resp, default="API key refusée ou CSRF requis")
         raise AuthError(f"C411 upload : {msg}")
+    if resp.status_code == 429:
+        # Quota pending atteint pour le palier d'uploader (Novice: 1, Apprenti: 3, etc.).
+        # On distingue de TrackerError pour permettre un fallback vers draft.
+        msg = _extract_error_msg(resp, default="quota d'uploads en attente atteint")
+        raise QuotaError(f"C411 upload : {msg}")
     if resp.status_code >= 400:
         msg = _extract_error_msg(resp, default=f"HTTP {resp.status_code}")
         raise TrackerError(f"C411 upload : {msg}")
@@ -863,7 +877,23 @@ class RawgResult:
     image_url: str
     genres: tuple[str, ...]
     platforms: tuple[str, ...]
+    screenshots: tuple[str, ...]
     raw: dict
+
+
+def _extract_screenshots(item: dict) -> tuple[str, ...]:
+    """Normalise `screenshots[]` (liste d'URLs str, ou de dicts {image|url})."""
+    out: list[str] = []
+    for s in item.get("screenshots") or []:
+        if isinstance(s, str):
+            url = s
+        elif isinstance(s, dict):
+            url = str(s.get("image") or s.get("url") or "")
+        else:
+            url = ""
+        if url.startswith("http") and url not in out:
+            out.append(url)
+    return tuple(out)
 
 
 def rawg_search(session_cookie: str, query: str, *, limit: int = 8) -> list[RawgResult]:
@@ -908,6 +938,7 @@ def rawg_search(session_cookie: str, query: str, *, limit: int = 8) -> list[Rawg
                 image_url=str(item.get("imageUrl") or item.get("backgroundUrl") or ""),
                 genres=tuple(str(g) for g in (item.get("genres") or []) if isinstance(g, str)),
                 platforms=tuple(str(p) for p in (item.get("platforms") or []) if isinstance(p, str)),
+                screenshots=_extract_screenshots(item),
                 raw=item,
             )
         )
@@ -975,3 +1006,192 @@ def rawg_lookup(session_cookie: str, rawg_id: int, *, presentation: bool = True)
         presentation_text=pres_text,
         genre_option_ids=[int(g) for g in (raw_genres or []) if str(g).isdigit() or isinstance(g, int)],
     )
+
+
+# ─────────────────────────── Drafts / Brouillons ───────────────────────────
+
+
+DRAFTS_MAX = 15  # limite côté serveur (palier supérieur ; certains paliers ont moins)
+
+
+@dataclass
+class Draft:
+    id: int
+    title: str
+    category_id: int
+    subcategory_id: int
+    category_name: str = ""
+    subcategory_name: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    raw: dict = None  # type: ignore[assignment]
+
+
+def _parse_draft(d: dict) -> Draft:
+    """Normalise un objet draft retourné par l'API en dataclass."""
+    return Draft(
+        id=int(d.get("id") or 0),
+        title=str(d.get("title") or ""),
+        category_id=int(d.get("categoryId") or d.get("category_id") or 0),
+        subcategory_id=int(d.get("subcategoryId") or d.get("subcategory_id") or 0),
+        category_name=str(d.get("categoryName") or (d.get("category") or {}).get("name", "") or ""),
+        subcategory_name=str(d.get("subcategoryName") or (d.get("subcategory") or {}).get("name", "") or ""),
+        created_at=str(d.get("createdAt") or d.get("created_at") or ""),
+        updated_at=str(d.get("updatedAt") or d.get("updated_at") or ""),
+        raw=d,
+    )
+
+
+def list_drafts(api_key: str) -> list[Draft]:
+    """GET /api/user/drafts — liste les brouillons de l'user."""
+    try:
+        with make_client(base_url=WEB_BASE) as client:
+            resp = client.get(
+                "/api/user/drafts",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 drafts : API key refusée")
+    if resp.status_code != 200:
+        raise TrackerError(f"C411 /api/user/drafts : HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 drafts : JSON invalide ({e})") from e
+    raw_list = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(raw_list, list):
+        return []
+    return [_parse_draft(d) for d in raw_list if isinstance(d, dict)]
+
+
+def get_draft(api_key: str, draft_id: int) -> Draft:
+    """GET /api/user/drafts/{id} — détail d'un brouillon."""
+    try:
+        with make_client(base_url=WEB_BASE) as client:
+            resp = client.get(
+                f"/api/user/drafts/{draft_id}",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 draft get : API key refusée")
+    if resp.status_code == 404:
+        raise TrackerError(f"C411 draft {draft_id} : introuvable")
+    if resp.status_code != 200:
+        raise TrackerError(f"C411 /api/user/drafts/{draft_id} : HTTP {resp.status_code}")
+    try:
+        payload = resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 draft : JSON invalide ({e})") from e
+    body = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(body, dict):
+        raise TrackerError("C411 draft : structure inattendue")
+    return _parse_draft(body)
+
+
+def create_draft(
+    api_key: str,
+    *,
+    torrent_path: Path,
+    nfo_path: Path,
+    title: str,
+    category_id: int,
+    subcategory_id: int,
+    description: str,
+    options: dict,
+    rawg_data: dict | None = None,
+    tmdb_id: int = 0,
+    tmdb_type: str = "movie",
+    imdb_id: str = "",
+    year: str = "",
+    description_format: str = "standard",
+    custom_poster_url: str = "",
+    uploader_note: str = "",
+) -> Draft:
+    """POST /api/user/drafts — crée un brouillon (mêmes champs que /api/torrents).
+
+    Reprise plus tard : POST /api/torrents avec les mêmes données + DELETE draft.
+    """
+    import json as _json
+
+    files = {
+        "torrent": (torrent_path.name, torrent_path.read_bytes(), "application/x-bittorrent"),
+        "nfo": (nfo_path.name, nfo_path.read_bytes(), "text/plain"),
+    }
+    data = {
+        "title": title,
+        "categoryId": str(category_id),
+        "subcategoryId": str(subcategory_id),
+        "description": description,
+        "descriptionFormat": description_format,
+        "options": _json.dumps(options),
+        "customPosterUrl": custom_poster_url or "",
+        "uploaderNote": uploader_note or "",
+    }
+    if rawg_data is not None:
+        data["rawgData"] = _json.dumps(rawg_data)
+    else:
+        tmdb_data = {
+            "tmdbId": tmdb_id or None,
+            "tmdbType": tmdb_type or None,
+            "imdbId": imdb_id or None,
+            "title": title,
+            "year": year or None,
+        }
+        data["tmdbData"] = _json.dumps(tmdb_data)
+
+    try:
+        with make_client(base_url=WEB_BASE) as client:
+            resp = client.post(
+                "/api/user/drafts",
+                data=data,
+                files=files,
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+
+    if resp.status_code in (401, 403):
+        msg = _extract_error_msg(resp, default="API key refusée")
+        raise AuthError(f"C411 draft create : {msg}")
+    if resp.status_code == 429:
+        msg = _extract_error_msg(resp, default="quota brouillons atteint (15 max)")
+        raise QuotaError(f"C411 draft create : {msg}")
+    if resp.status_code >= 400:
+        msg = _extract_error_msg(resp, default=f"HTTP {resp.status_code}")
+        raise TrackerError(f"C411 draft create : {msg}")
+    try:
+        payload = resp.json()
+    except (json.JSONDecodeError, ValueError) as e:
+        raise TrackerError(f"C411 draft create : JSON invalide ({e})") from e
+    body = payload.get("data") if isinstance(payload, dict) else payload
+    if not isinstance(body, dict):
+        raise TrackerError("C411 draft create : structure inattendue")
+    return _parse_draft(body)
+
+
+def delete_draft(api_key: str, draft_id: int) -> str:
+    """DELETE /api/user/drafts/{id} — supprime un brouillon."""
+    try:
+        with make_client(base_url=WEB_BASE) as client:
+            resp = client.delete(
+                f"/api/user/drafts/{draft_id}",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+    except httpx.HTTPError as e:
+        raise TrackerError(f"Connexion C411 impossible : {e}") from e
+    if resp.status_code in (401, 403):
+        raise AuthError("C411 draft delete : API key refusée")
+    if resp.status_code == 404:
+        return "déjà supprimé"
+    if resp.status_code >= 400:
+        msg = _extract_error_msg(resp, default=f"HTTP {resp.status_code}")
+        raise TrackerError(f"C411 draft delete : {msg}")
+    try:
+        data = resp.json()
+        return str(data.get("message") or "Brouillon supprimé.")
+    except (json.JSONDecodeError, ValueError):
+        return "Brouillon supprimé."

@@ -6,6 +6,7 @@ from trackr import __version__, dashboard as dashboard_mod, healthcheck, ui, upd
 from trackr.config import load_config
 from trackr.flows import configure as configure_flow
 from trackr.flows import delete as delete_flow
+from trackr.flows import drafts as drafts_flow
 from trackr.flows import inspect as inspect_flow
 from trackr.flows import game as game_flow
 from trackr.flows import movie as movie_flow
@@ -72,6 +73,15 @@ def _main_menu() -> str | None:
             questionary.Choice(
                 f"🚨  Résoudre les rejets C411 ({n_rej})",
                 value="rejection",
+            )
+        )
+    # Entrée brouillons C411 — conditionnée à la présence d'au moins un brouillon
+    n_drafts = drafts_flow.count()
+    if n_drafts:
+        choices.append(
+            questionary.Choice(
+                f"📝  Brouillons C411 ({n_drafts})",
+                value="drafts",
             )
         )
     choices += [
@@ -191,6 +201,9 @@ def _loop() -> None:
         elif action == "rejection":
             rejection_flow.run()
             dashboard_mod.invalidate()  # rafraîchir après actions
+        elif action == "drafts":
+            drafts_flow.run()
+            dashboard_mod.invalidate()
         elif action == "inspect":
             inspect_flow.run()
         elif action == "delete":
