@@ -249,6 +249,48 @@ def detect_source_tag(file_path: Path) -> str:
     return raw
 
 
+_VM_ORDER = (
+    "REPACK", "RERIP", "PROPER", "CUSTOM", "UNCENSORED", "NC",
+    "V2", "V3", "FANSUB", "FASTSUB",
+)
+
+_VERSION_MARKER_RX = re.compile(
+    r"(?:(?<=[._ \-])|^)"
+    r"(REPACK|RERIP|PROPER|CUSTOM|UNCENSORED|NC|V2|V3|FANSUB|FASTSUB)"
+    r"(?=[._ \-]|$)",
+    re.IGNORECASE,
+)
+
+
+def _order_version_markers(markers: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in markers:
+        mu = (m or "").strip().upper()
+        if mu and mu not in seen:
+            seen.add(mu)
+            out.append(mu)
+    return sorted(
+        out,
+        key=lambda m: _VM_ORDER.index(m) if m in _VM_ORDER else len(_VM_ORDER),
+    )
+
+
+def detect_version_markers(file_path: Path) -> tuple[str, ...]:
+    found = _VERSION_MARKER_RX.findall(file_path.name)
+    return tuple(_order_version_markers(found))
+
+
+def _split_lang_markers(language_tag: str) -> tuple[str, list[str]]:
+    lt = language_tag or ""
+    markers: list[str] = []
+    for mk in ("FANSUB", "FASTSUB"):
+        if lt.upper().endswith("." + mk):
+            markers.append(mk)
+            lt = lt[: -(len(mk) + 1)]
+    return lt, markers
+
+
 # ─────────────────────── titre par tracker ───────────────────────
 
 
@@ -260,13 +302,16 @@ def suggest_title_c411(
     language_tag: str,
     team: str = "NOTAG",
     is_reencode: bool = True,
+    version_markers: tuple[str, ...] = (),
 ) -> str:
-    """Format C411 Films : `Nom.Année.Langue.Résolution.Source.CodecAudio[.Channels].CodecVidéo-TEAM`.
+    """Format C411 Films : `Nom.Année.[Marqueurs].Langue.Résolution.Source.CodecAudio[.Channels].CodecVidéo-TEAM`.
 
     `is_reencode=False` ⇒ codec en H265/H264 (release directe depuis la source).
     """
     name = to_dot_case(hit.title)
     year = hit.year or ""
+    pure_lang, lang_markers = _split_lang_markers(language_tag)
+    markers = _order_version_markers(list(version_markers) + lang_markers)
     res = resolution_label(info)  # "1080p" / "2160p" / etc.
     first_audio = info.audio[0] if info.audio else None
     acodec = audio_codec_tag(first_audio.codec) if first_audio else ""
@@ -276,8 +321,9 @@ def suggest_title_c411(
     parts = [name]
     if year:
         parts.append(year)
-    if language_tag:
-        parts.append(language_tag)
+    parts.extend(markers)
+    if pure_lang:
+        parts.append(pure_lang)
     if res and res != "?":
         parts.append(res)
     if source:

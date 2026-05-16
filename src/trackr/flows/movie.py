@@ -26,6 +26,7 @@ from trackr.nfo.builder import (
     detect_language_tag,
     detect_source_tag,
     detect_team_tag,
+    detect_version_markers,
     has_encoding_settings,
     has_fr_audio,
     has_fr_subs,
@@ -210,8 +211,9 @@ def run() -> None:
     title_default = suggest_title_c411(
         hit, info, source=source_hint, language_tag=language_tag, team=team_tag,
         is_reencode=is_reencode,
+        version_markers=detect_version_markers(file_path),
     )
-    ui.console.print(f"[{ui.MUTED}]Format : Nom.Année.Lang.Res.Source.Audio.Vidéo-TEAM (sans accents).[/]")
+    ui.console.print(f"[{ui.MUTED}]Format : Nom.Année.[Marqueurs].Lang.Res.Source.Audio.Vidéo-TEAM (sans accents).[/]")
     release_title = questionary.text("Titre release :", default=title_default).ask()
     if not release_title:
         return
