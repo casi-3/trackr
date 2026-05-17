@@ -450,6 +450,15 @@ def _ask_vod_platform() -> str:
     return choice or ""
 
 
+def _fallback_lang_default(tag: str) -> str:
+    up = (tag or "").upper()
+    if up.startswith("MULTI"):
+        return "MULTi.VFF"
+    if up in ("VO", "VOQ", "VOSTA"):
+        return "VOSTFR"
+    return "VFF"
+
+
 def _ask_language_tag(path: Path, info: MediaInfo) -> str:
     detected = detect_language_tag(path, info)
     # Garde-fou C411 : pas de piste FR + pas de sous-titres FR = upload interdit.
@@ -479,13 +488,15 @@ def _ask_language_tag(path: Path, info: MediaInfo) -> str:
         questionary.Choice("TRUEFRENCH", value="TRUEFRENCH"),
         questionary.Choice("FRENCH", value="FRENCH"),
     ]
+    valid_values = {c.value for c in choices}
+    default = detected if detected in valid_values else _fallback_lang_default(detected)
     return (
         questionary.select(
             f"Tag de langue (détecté : {detected}) :",
             choices=choices,
-            default=detected,
+            default=default,
         ).ask()
-        or detected
+        or default
     )
 
 
