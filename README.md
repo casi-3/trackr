@@ -17,8 +17,9 @@ Aucune donnée n'est collectée, aucune donnée n'est partagée.
 - Aucun serveur appartenant à trackr — l'outil n'a pas de backend.
 - Les communications réseau vont uniquement vers les trackers configurés,
   l'instance qBittorrent renseignée, les bases TMDB et RAWG.io via les
-  proxies des trackers (aucune clé API à fournir), et — seulement si tu
-  l'actives pour les captures d'écran — l'hébergeur d'images Catbox.
+  proxies des trackers (aucune clé API à fournir), GitHub (vérification et
+  téléchargement des mises à jour), et — seulement si tu l'actives pour
+  les captures d'écran — l'hébergeur d'images Catbox.
 - Identifiants stockés en local via
   [`platformdirs`](https://pypi.org/project/platformdirs/) :
   - Linux : `~/.config/trackr/config.toml`
@@ -54,6 +55,9 @@ Aucune donnée n'est collectée, aucune donnée n'est partagée.
 - Mode batch pour enchaîner plusieurs uploads.
 - Dashboard : ratio par tracker, uploads en attente de modération,
   derniers torrents publiés.
+- Mise à jour intégrée : vérification au démarrage, changelog de la
+  nouvelle version affiché, installation en un choix — le binaire se
+  remplace en place et relance, y compris sous Windows.
 
 ---
 
@@ -108,6 +112,19 @@ user/password.
    d'authentification.
 4. **Uploader un torrent** ou **Uploader un jeu** depuis le menu
    principal.
+
+---
+
+## Mise à jour
+
+À chaque lancement, trackr vérifie s'il existe une version plus récente
+sur GitHub. Le cas échéant, il affiche le changelog complet de cette
+version et propose de l'installer :
+
+- **Binaire** (Windows / Linux / macOS) : téléchargement, remplacement du
+  binaire en place et relance automatique — rien à réinstaller.
+- **Sources (git)** : `git pull --ff-only` puis relance.
+- **pip** : la commande de mise à jour à lancer est affichée.
 
 ---
 
