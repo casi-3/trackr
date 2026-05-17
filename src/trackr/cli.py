@@ -171,7 +171,7 @@ def _check_update_blocking() -> None:
         )
     )
     mode = updater.detect_install_mode()
-    if mode in ("windows-binary", "pip"):
+    if mode == "pip":
         ui.console.print(f"[{ui.MUTED}]{updater.manual_instructions(info)}[/]")
         questionary.text(
             "Appuie sur Entrée pour continuer sans mettre à jour…",
@@ -181,12 +181,13 @@ def _check_update_blocking() -> None:
     if not questionary.confirm("Mettre à jour maintenant ?", default=True).ask():
         return
     try:
-        updater.apply_update(info)  # ne revient pas si succès (execv)
+        updater.apply_update(info)  # ne revient pas si succès
     except updater.UpdateError as e:
         ui.console.print(ui.error_panel("Mise à jour échouée", str(e)))
 
 
 def _loop() -> None:
+    updater.cleanup_after_update()
     _check_update_blocking()
     while True:
         _draw_home()

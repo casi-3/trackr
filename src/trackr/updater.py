@@ -10,7 +10,7 @@ Modes d'installation supportés pour l'auto-update :
 - `binary` (PyInstaller Linux/macOS) : download asset → swap → restart via execv.
 - `git`    (clone source)            : `git pull --ff-only` → restart Python.
 - `pip`    (pip install)             : affiche la commande à taper.
-- `windows-binary`                   : affiche un lien vers la release.
+- `windows-binary` (PyInstaller .exe) : download → rename-self → relance le nouvel exe.
 """
 
 from __future__ import annotations
@@ -194,6 +194,55 @@ def _apply_binary(info: UpdateInfo) -> None:
         raise UpdateError(f"Redémarrage échoué : {e}") from e
 
 
+def _apply_windows_binary(info: UpdateInfo) -> None:
+    """Windows : rename-self (on ne peut pas écraser un .exe qui tourne, mais on peut le renommer)."""
+    if not info.asset_url:
+        raise UpdateError(
+            f"Aucun asset {info.asset_name or '(inconnu)'} dans la release {info.latest_tag}."
+        )
+    current = Path(sys.executable).resolve()
+    if not current.exists():
+        raise UpdateError(f"Binaire courant introuvable : {current}")
+    new = current.with_name(current.name + ".new")
+    old = current.with_name(current.name + ".old")
+    _download_to(info.asset_url, new)
+    if new.stat().st_size < 1_000_000:
+        new.unlink(missing_ok=True)
+        raise UpdateError("Téléchargement trop petit — annulé.")
+    try:
+        old.unlink(missing_ok=True)
+    except OSError:
+        pass
+    try:
+        os.replace(current, old)
+    except OSError as e:
+        new.unlink(missing_ok=True)
+        raise UpdateError(f"Renommage de l'exe courant impossible : {e}") from e
+    try:
+        os.replace(new, current)
+    except OSError as e:
+        os.replace(old, current)
+        new.unlink(missing_ok=True)
+        raise UpdateError(f"Installation du nouvel exe impossible : {e}") from e
+    try:
+        subprocess.Popen([str(current), *sys.argv[1:]], cwd=str(current.parent))
+    except OSError as e:
+        raise UpdateError(f"Redémarrage échoué : {e}") from e
+    os._exit(0)
+
+
+def cleanup_after_update() -> None:
+    """Supprime le .old laissé par un rename-self Windows précédent (best-effort)."""
+    if not getattr(sys, "frozen", False) or sys.platform != "win32":
+        return
+    current = Path(sys.executable).resolve()
+    leftover = current.with_name(current.name + ".old")
+    try:
+        leftover.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _apply_git(info: UpdateInfo) -> None:
     root = Path(__file__).resolve().parents[2]
     if not (root / ".git").exists():
@@ -226,10 +275,8 @@ def apply_update(info: UpdateInfo) -> None:
         _apply_git(info)
         return
     if mode == "windows-binary":
-        raise UpdateError(
-            "Sur Windows, télécharge manuellement le nouveau binaire depuis :\n"
-            f"{info.html_url}"
-        )
+        _apply_windows_binary(info)
+        return
     # pip
     raise UpdateError(
         "Installation pip détectée — mets à jour avec :\n"
