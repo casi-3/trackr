@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trackr"
-version = "0.1.21"
+version = "0.1.22"
 description = "CLI guidé pour publier des torrents sur plusieurs trackers"
 readme = "README.md"
 requires-python = ">=3.10"
