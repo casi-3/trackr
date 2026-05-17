@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import questionary
 import typer
+from rich.markdown import Markdown
 from trackr import __version__, dashboard as dashboard_mod, healthcheck, ui, updater, upload_queue
 from trackr.config import load_config
 from trackr.flows import configure as configure_flow
@@ -170,6 +171,9 @@ def _check_update_blocking() -> None:
             f"[{ui.MUTED}]{info.html_url}[/]",
         )
     )
+    notes = (info.notes or "").strip()
+    if notes:
+        ui.console.print(ui.info_panel(f"Changelog {info.latest_tag}", Markdown(notes)))
     mode = updater.detect_install_mode()
     if mode == "pip":
         ui.console.print(f"[{ui.MUTED}]{updater.manual_instructions(info)}[/]")
