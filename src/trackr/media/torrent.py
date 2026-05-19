@@ -54,12 +54,18 @@ def create_torrent(
     source_tag: str = "",
     private: bool = True,
     piece_size: int | None = None,
+    include_globs: list[str] | None = None,
+    exclude_globs: list[str] | None = None,
     label: str = "Création du .torrent",
 ) -> TorrentBuildResult:
     """Crée un .torrent depuis `source_path` vers `output_path`.
 
     Affiche une progress bar Rich pendant le hashing. `piece_size` en bytes
     (laisser None pour auto-pick par torf selon la taille).
+
+    `exclude_globs` retire les fichiers correspondants, `include_globs` les
+    ré-inclut (whitelist) — utile pour ne garder que les vidéos d'un dossier
+    pollué (artefacts Plex, vignettes, etc.).
     """
     if not source_path.exists():
         raise TorrentBuildError(f"Source introuvable : {source_path}")
@@ -74,6 +80,8 @@ def create_torrent(
             source=source_tag or None,
             created_by="trackr",
             piece_size=piece_size,
+            exclude_globs=exclude_globs or [],
+            include_globs=include_globs or [],
         )
     except TorfError as e:
         raise TorrentBuildError(f"Init .torrent : {e}") from e

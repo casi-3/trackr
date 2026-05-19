@@ -247,6 +247,13 @@ def run() -> None:
     desc_path.write_text(description, encoding="utf-8")
 
     torrent_source = src_path if src_path.is_dir() else rep_file
+    is_dir_source = src_path.is_dir()
+    video_globs = sorted(f"*{e}" for e in _VIDEO_EXT)
+    if is_dir_source:
+        ui.console.print(
+            f"[{ui.MUTED}]Dossier source : seuls les fichiers vidéo entrent dans le "
+            f".torrent (vignettes, .trickplay, posters, .plexmatch… exclus).[/]"
+        )
     for plan in plans:
         ui.console.print()
         torrent_out = out_dir / f"{plan.name}.torrent"
@@ -257,6 +264,8 @@ def run() -> None:
                 output_path=torrent_out,
                 source_tag=plan.source_tag,
                 private=True,
+                exclude_globs=["*"] if is_dir_source else None,
+                include_globs=video_globs if is_dir_source else None,
                 label=f"{plan.name}: hashing",
             )
         except torrent_mod.TorrentBuildError as e:
