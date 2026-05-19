@@ -218,4 +218,9 @@ def probe(path: Path) -> MediaInfo:
                 )
             )
 
+    if info.video.codec and not info.video.bitrate and info.overall_bitrate:
+        est = info.overall_bitrate - sum(a.bitrate for a in info.audio)
+        if est > 0:
+            info.video.bitrate = est
+
     return info
