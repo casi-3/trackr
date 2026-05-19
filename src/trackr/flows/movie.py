@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -161,6 +162,9 @@ def run() -> None:
     vod_platform = ""
     if source_hint in ("WEB", "WEB-DL", "WEBRip"):
         vod_platform = _ask_vod_platform()
+    disc_structure = ""
+    if source_hint == "BluRay":
+        disc_structure = _ask_disc_structure(file_path)
     language_tag = _ask_language_tag(file_path, info)
     detected_team = detect_team_tag(file_path)
     team_label = (
@@ -212,8 +216,9 @@ def run() -> None:
         hit, info, source=source_hint, language_tag=language_tag, team=team_tag,
         is_reencode=is_reencode,
         version_markers=detect_version_markers(file_path),
+        disc_structure=disc_structure,
     )
-    ui.console.print(f"[{ui.MUTED}]Format : Nom.Année.[Marqueurs].Lang.Res.Source.Audio.Vidéo-TEAM (sans accents).[/]")
+    ui.console.print(f"[{ui.MUTED}]Format : Nom.Année.[Marqueurs].Lang.Res.Source[.Structure].Audio.Vidéo-TEAM (sans accents).[/]")
     release_title = questionary.text("Titre release :", default=title_default).ask()
     if not release_title:
         return
@@ -251,6 +256,7 @@ def run() -> None:
         release_title=release_title,
         source=source_hint,
         vod_platform=vod_platform,
+        disc_structure=disc_structure,
         team_tag=team_tag,
         total_size=payload_size,
     )
@@ -457,6 +463,25 @@ def _fallback_lang_default(tag: str) -> str:
     if up in ("VO", "VOQ", "VOSTA"):
         return "VOSTFR"
     return "VFF"
+
+
+_DISC_STRUCT_RX = re.compile(r"\b(REMUX|BDMV|ISO)\b", re.IGNORECASE)
+
+
+def _ask_disc_structure(path: Path) -> str:
+    m = _DISC_STRUCT_RX.search(path.name)
+    detected = m.group(1).upper() if m else ""
+    choice = questionary.select(
+        "Structure Blu-ray ?",
+        choices=[
+            questionary.Choice("Encode (ré-encodé : x264 / x265 / AV1)", value=""),
+            questionary.Choice("REMUX (flux disque copié, sans ré-encodage)", value="REMUX"),
+            questionary.Choice("BDMV (arborescence disque complète)", value="BDMV"),
+            questionary.Choice("ISO (image disque)", value="ISO"),
+        ],
+        default=detected,
+    ).ask()
+    return choice or ""
 
 
 def _ask_language_tag(path: Path, info: MediaInfo) -> str:

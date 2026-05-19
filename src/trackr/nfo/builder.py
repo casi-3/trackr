@@ -91,18 +91,14 @@ def to_dot_case(s: str) -> str:
 # ─────────────────────── codec / language tags ───────────────────────
 
 
-def video_codec_tag(codec: str, *, scene_style: bool = True) -> str:
-    """HEVC → x265 / H265 selon `scene_style` ; AVC → x264 / H264 ; etc.
-
-    `scene_style=True` ⇒ re-encode (x265/x264) ; `scene_style=False` ⇒ stream
-    direct depuis la source (H265/H264). Pour C411 la règle est : si le NFO
-    contient « Encoding settings » → re-encode → x26x ; sinon → H26x.
-    """
+def video_codec_tag(codec: str, *, scene_style: bool = True, pure: bool = False) -> str:
+    """`pure=True` (REMUX/BDMV/ISO) ⇒ HEVC/AVC. Sinon `scene_style=True` ⇒
+    x26x (re-encode), `scene_style=False` ⇒ H26x (WEB-DL untouched)."""
     c = (codec or "").lower()
     if "hevc" in c or "h.265" in c or "h265" in c:
-        return "x265" if scene_style else "H265"
+        return "HEVC" if pure else ("x265" if scene_style else "H265")
     if "avc" in c or "h.264" in c or "h264" in c:
-        return "x264" if scene_style else "H264"
+        return "AVC" if pure else ("x264" if scene_style else "H264")
     if "av1" in c:
         return "AV1"
     if "vp9" in c:
@@ -303,20 +299,27 @@ def suggest_title_c411(
     team: str = "NOTAG",
     is_reencode: bool = True,
     version_markers: tuple[str, ...] = (),
+    disc_structure: str = "",
 ) -> str:
-    """Format C411 Films : `Nom.Année.[Marqueurs].Langue.Résolution.Source.CodecAudio[.Channels].CodecVidéo-TEAM`.
+    """Format C411 Films : `Nom.Année.[Marqueurs].Langue.Résolution.Source[.Structure].CodecAudio[.Channels].CodecVidéo-TEAM`.
 
-    `is_reencode=False` ⇒ codec en H265/H264 (release directe depuis la source).
+    `disc_structure` (REMUX/BDMV/ISO) ⇒ version pure ⇒ codec en HEVC/AVC.
+    Sinon `is_reencode=False` ⇒ H265/H264 (WEB-DL untouched), True ⇒ x265/x264.
     """
     name = to_dot_case(hit.title)
     year = hit.year or ""
     pure_lang, lang_markers = _split_lang_markers(language_tag)
     markers = _order_version_markers(list(version_markers) + lang_markers)
     res = resolution_label(info)  # "1080p" / "2160p" / etc.
+    structure = (disc_structure or "").strip().upper()
+    pure = bool(structure)
+    src = source or ""
+    if src == "BluRay" and res == "2160p":
+        src = "UHD.BluRay"
     first_audio = info.audio[0] if info.audio else None
     acodec = audio_codec_tag(first_audio.codec) if first_audio else ""
     chans = channels_tag(first_audio.channels) if first_audio else ""
-    vcodec = video_codec_tag(info.video.codec, scene_style=is_reencode)
+    vcodec = video_codec_tag(info.video.codec, scene_style=is_reencode, pure=pure)
 
     parts = [name]
     if year:
@@ -326,8 +329,10 @@ def suggest_title_c411(
         parts.append(pure_lang)
     if res and res != "?":
         parts.append(res)
-    if source:
-        parts.append(source.replace(" ", ""))
+    if src:
+        parts.append(src.replace(" ", ""))
+    if structure:
+        parts.append(structure)
     if acodec:
         if chans:
             parts.append(f"{acodec}.{chans}")
@@ -483,6 +488,7 @@ def build_description_bbcode(
     release_title: str = "",
     source: str = "",
     vod_platform: str = "",
+    disc_structure: str = "",
     team_tag: str = "",
     file_count: int = 1,
     total_size: int | None = None,
@@ -518,6 +524,11 @@ def build_description_bbcode(
     lines.append(_section_header("DÉTAILS TECHNIQUES"))
     lines.append("")
     source_line = source or "?"
+    if source == "BluRay" and resolution_label(info) == "2160p":
+        source_line = "UHD.BluRay"
+    structure = (disc_structure or "").strip().upper()
+    if structure:
+        source_line = f"{source_line} {structure}"
     if vod_platform:
         source_line = f"{source_line} ({vod_platform})"
     lines.append(f"[b]Source :[/b] {source_line}")
