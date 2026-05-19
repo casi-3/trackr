@@ -146,6 +146,72 @@ def channels_tag(channels: str | int) -> str:
     return mapping.get(n, str(n))
 
 
+def _chan_int(channels: str | int) -> int:
+    try:
+        return int(str(channels).split()[0])
+    except (ValueError, IndexError):
+        return 0
+
+
+def is_lossless(track) -> bool:
+    if (getattr(track, "compression", "") or "").strip().lower() == "lossless":
+        return True
+    blob = " ".join(
+        str(getattr(track, k, "") or "")
+        for k in ("commercial", "format_extra", "codec")
+    ).lower()
+    return any(
+        s in blob
+        for s in ("master audio", "truehd", "mlp", "flac", "lpcm", "pcm", "alac", "xll")
+    )
+
+
+def audio_track_tag(track) -> str:
+    codec = (getattr(track, "codec", "") or "").upper()
+    commercial = (getattr(track, "commercial", "") or "").lower()
+    extra = (getattr(track, "format_extra", "") or "").lower()
+    atmos = "atmos" in commercial or "joc" in extra
+    if "truehd" in commercial or "mlp" in codec.lower() or codec == "TRUEHD":
+        return "TrueHD.ATMOS" if atmos else "TrueHD"
+    if codec.startswith("DTS") or "dts" in commercial:
+        if "dts:x" in commercial or extra.strip().endswith("x") and "xll" in extra:
+            return "DTSX"
+        if "master audio" in commercial or extra.strip() == "xll":
+            return "DTS.HD.MA"
+        return "DTS"
+    if codec in ("E-AC-3", "EAC3") or "digital plus" in commercial:
+        return "EAC3.ATMOS" if atmos else "EAC3"
+    if codec in ("AC-3", "AC3"):
+        return "AC3"
+    if "aac" in codec.lower():
+        return "AAC"
+    if "flac" in codec.lower():
+        return "FLAC"
+    if "pcm" in codec.lower():
+        return "LPCM"
+    if "opus" in codec.lower():
+        return "OPUS"
+    if "mpeg audio" in codec.lower() or codec == "MP3":
+        return "MP3"
+    return audio_codec_tag(getattr(track, "codec", ""))
+
+
+def select_title_audio(info):
+    """Piste audio dont le codec va dans le titre (règle C411) : si une piste
+    lossless existe, on prend la lossless avec le plus de canaux peu importe la
+    langue ; sinon la piste FR lossy avec le plus de canaux."""
+    audios = list(getattr(info, "audio", []) or [])
+    if not audios:
+        return None
+    lossless = [a for a in audios if is_lossless(a)]
+    if lossless:
+        pool = lossless
+    else:
+        fr = [a for a in audios if (a.language or "").lower().startswith("fr")]
+        pool = fr or audios
+    return max(pool, key=lambda a: (_chan_int(a.channels), a.bitrate or 0))
+
+
 _LANG_RX = re.compile(
     # Matches `VOSTFR.FANSUB` / `VOSTFR.FASTSUB` en premier (la suite est un suffixe optionnel)
     r"\bVOSTFR\.(FANSUB|FASTSUB)\b|"
@@ -247,12 +313,15 @@ def detect_source_tag(file_path: Path) -> str:
 
 _VM_ORDER = (
     "REPACK", "RERIP", "PROPER", "CUSTOM", "UNCENSORED", "NC",
-    "V2", "V3", "FANSUB", "FASTSUB",
+    "V2", "V3",
+    "IMAX", "REMASTERED", "EXTENDED", "UNCUT", "THEATRICAL", "HYBRID", "OPENMATTE",
+    "FANSUB", "FASTSUB",
 )
 
 _VERSION_MARKER_RX = re.compile(
     r"(?:(?<=[._ \-])|^)"
-    r"(REPACK|RERIP|PROPER|CUSTOM|UNCENSORED|NC|V2|V3|FANSUB|FASTSUB)"
+    r"(REPACK|RERIP|PROPER|CUSTOM|UNCENSORED|NC|V2|V3|"
+    r"IMAX|REMASTERED|EXTENDED|UNCUT|THEATRICAL|HYBRID|OPENMATTE|FANSUB|FASTSUB)"
     r"(?=[._ \-]|$)",
     re.IGNORECASE,
 )
@@ -300,11 +369,13 @@ def suggest_title_c411(
     is_reencode: bool = True,
     version_markers: tuple[str, ...] = (),
     disc_structure: str = "",
+    doc: bool = False,
 ) -> str:
-    """Format C411 Films : `Nom.Année.[Marqueurs].Langue.Résolution.Source[.Structure].CodecAudio[.Channels].CodecVidéo-TEAM`.
+    """Format C411 Films : `Nom.Année[.DOC].[Marqueurs].Langue.Résolution.Source[.Structure].CodecAudio[.Channels].CodecVidéo-TEAM`.
 
     `disc_structure` (REMUX/BDMV/ISO) ⇒ version pure ⇒ codec en HEVC/AVC.
     Sinon `is_reencode=False` ⇒ H265/H264 (WEB-DL untouched), True ⇒ x265/x264.
+    `doc=True` ⇒ insère le marqueur DOC (documentaire) après l'année.
     """
     name = to_dot_case(hit.title)
     year = hit.year or ""
@@ -316,14 +387,16 @@ def suggest_title_c411(
     src = source or ""
     if src == "BluRay" and res == "2160p":
         src = "UHD.BluRay"
-    first_audio = info.audio[0] if info.audio else None
-    acodec = audio_codec_tag(first_audio.codec) if first_audio else ""
-    chans = channels_tag(first_audio.channels) if first_audio else ""
+    sel_audio = select_title_audio(info)
+    acodec = audio_track_tag(sel_audio) if sel_audio else ""
+    chans = channels_tag(sel_audio.channels) if sel_audio else ""
     vcodec = video_codec_tag(info.video.codec, scene_style=is_reencode, pure=pure)
 
     parts = [name]
     if year:
         parts.append(year)
+    if doc:
+        parts.append("DOC")
     parts.extend(markers)
     if pure_lang:
         parts.append(pure_lang)

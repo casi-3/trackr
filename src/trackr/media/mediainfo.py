@@ -44,6 +44,9 @@ class AudioTrack:
     bitrate: int = 0
     language: str = ""
     title: str = ""
+    commercial: str = ""
+    format_extra: str = ""
+    compression: str = ""
 
 
 @dataclass
@@ -187,6 +190,9 @@ def probe(path: Path) -> MediaInfo:
                     bitrate=_to_int(tr.get("BitRate")),
                     language=tr.get("Language", ""),
                     title=tr.get("Title", ""),
+                    commercial=tr.get("Format_Commercial_IfAny", ""),
+                    format_extra=tr.get("Format_AdditionalFeatures", ""),
+                    compression=tr.get("Compression_Mode", ""),
                 )
             )
         elif kind == "Text":

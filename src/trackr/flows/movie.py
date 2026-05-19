@@ -212,13 +212,17 @@ def run() -> None:
         )
 
     # 8. Titre release (format C411 strict, appliqué partout)
+    is_doc = 99 in (hit.genre_ids or []) or bool(
+        re.search(r"(?:(?<=[._ \-])|^)DOC(?=[._ \-]|$)", file_path.name, re.IGNORECASE)
+    )
     title_default = suggest_title_c411(
         hit, info, source=source_hint, language_tag=language_tag, team=team_tag,
         is_reencode=is_reencode,
         version_markers=detect_version_markers(file_path),
         disc_structure=disc_structure,
+        doc=is_doc,
     )
-    ui.console.print(f"[{ui.MUTED}]Format : Nom.Année.[Marqueurs].Lang.Res.Source[.Structure].Audio.Vidéo-TEAM (sans accents).[/]")
+    ui.console.print(f"[{ui.MUTED}]Format : Nom.Année[.DOC].[Marqueurs].Lang.Res.Source[.Structure].Audio.Vidéo-TEAM (sans accents).[/]")
     release_title = questionary.text("Titre release :", default=title_default).ask()
     if not release_title:
         return
