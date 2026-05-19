@@ -50,6 +50,7 @@ from trackr.flows.movie import (
     _normalize_path,
     _offer_seed,
     _post_plan,
+    _preflight_nfo_guard,
     _print_post_result,
     _render_hit,
     _save_to_queue,
@@ -189,6 +190,11 @@ def run() -> None:
             f"[{ui.MUTED}]NFO sans « Encoding settings » → release directe : "
             f"codec en H264/H265 (pas x264/x265).[/]"
         )
+
+    if not _preflight_nfo_guard(nfo_text, disc_structure):
+        ui.console.print(f"[{ui.MUTED}]Upload annulé.[/]")
+        ui.press_enter()
+        return
 
     dynamic_range = detect_dynamic_range(rep_file, info)
     title_default = suggest_title_c411(

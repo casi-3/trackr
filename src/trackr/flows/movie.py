@@ -26,10 +26,12 @@ from trackr.nfo.builder import (
     build_nfo,
     detect_language_tag,
     detect_dynamic_range,
+    detect_gpu_encoder,
     detect_source_tag,
     detect_team_tag,
     detect_version_markers,
     has_encoding_settings,
+    reencoded_hint,
     has_fr_audio,
     has_fr_subs,
     slugify,
@@ -211,6 +213,11 @@ def run() -> None:
             f"[{ui.MUTED}]NFO sans « Encoding settings » → release directe : "
             f"codec en H264/H265 (pas x264/x265).[/]"
         )
+
+    if not _preflight_nfo_guard(nfo_text, disc_structure):
+        ui.console.print(f"[{ui.MUTED}]Upload annulé.[/]")
+        ui.press_enter()
+        return
 
     # 8. Titre release (format C411 strict, appliqué partout)
     is_doc = 99 in (hit.genre_ids or []) or bool(
@@ -490,6 +497,43 @@ def _ask_disc_structure(path: Path) -> str:
         default=detected,
     ).ask()
     return choice or ""
+
+
+def _preflight_nfo_guard(nfo_text: str, disc_structure: str) -> bool:
+    """Garde-fou avant POST. Renvoie False si l'utilisateur abandonne.
+
+    - Encode GPU (NVENC/QSV/AMF) → interdit C411, rejet quasi certain.
+    - Structure pure annoncée (REMUX/BDMV/ISO) mais NFO montrant un
+      ré-encodage → faux remux.
+    """
+    gpu = detect_gpu_encoder(nfo_text)
+    if gpu:
+        ui.console.print(
+            ui.error_panel(
+                "Encodage GPU détecté — non conforme C411",
+                f"Le NFO indique un encodeur GPU « {gpu} ». C411 interdit "
+                f"NVENC / QSV / AMF (qualité irrégulière à taille égale). "
+                f"L'upload sera quasi certainement rejeté par la modération.",
+            )
+        )
+        if not questionary.confirm("Continuer quand même ?", default=False).ask():
+            return False
+    structure = (disc_structure or "").strip().upper()
+    if structure in ("REMUX", "BDMV", "ISO"):
+        enc = reencoded_hint(nfo_text)
+        if enc:
+            ui.console.print(
+                ui.warn_panel(
+                    f"Structure « {structure} » douteuse",
+                    f"Tu as choisi {structure} (version pure, flux disque intact) "
+                    f"mais le NFO montre un ré-encodage ({enc}). Ce n'est pas un "
+                    f"vrai {structure} — C411 attend AVC/HEVC sans ré-encodage "
+                    f"pour ces structures.",
+                )
+            )
+            if not questionary.confirm("Continuer quand même ?", default=False).ask():
+                return False
+    return True
 
 
 def _ask_language_tag(path: Path, info: MediaInfo) -> str:

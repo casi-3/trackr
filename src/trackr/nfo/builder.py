@@ -114,6 +114,58 @@ def has_encoding_settings(nfo_text: str) -> bool:
     return bool(_ENCODING_SETTINGS_RX.search(nfo_text or ""))
 
 
+_ENCODER_LINE_PREFIXES = ("writing library", "writing application", "encoding settings")
+
+_GPU_ENCODER_RX = re.compile(
+    r"\b(h26[45]_nvenc|hevc_nvenc|av1_nvenc|nvenc|"
+    r"h26[45]_qsv|hevc_qsv|av1_qsv|qsv|"
+    r"h26[45]_amf|hevc_amf|av1_amf|amf|videotoolbox)\b",
+    re.IGNORECASE,
+)
+
+_REENCODER_RX = re.compile(
+    r"\b(x26[456]|nvenc|qsv|amf|svt[ -]?av1|aomenc|libaom|libvpx|"
+    r"rav1e|lavc\d+|handbrake|videotoolbox)\b",
+    re.IGNORECASE,
+)
+
+
+def _encoder_lines(nfo_text: str):
+    for line in (nfo_text or "").splitlines():
+        ls = line.strip()
+        if ls.lower().startswith(_ENCODER_LINE_PREFIXES):
+            yield ls
+
+
+def detect_gpu_encoder(nfo_text: str) -> str:
+    """Renvoie le tag d'encodeur GPU trouvé dans le NFO (nvenc/qsv/amf…), sinon "".
+
+    C411 interdit l'encodage GPU. Le serveur le détecte via la « Writing
+    library » du NFO ; on fait pareil en amont pour éviter un POST voué à l'échec.
+    """
+    for ls in _encoder_lines(nfo_text):
+        m = _GPU_ENCODER_RX.search(ls)
+        if m:
+            return m.group(1).lower()
+    return ""
+
+
+def reencoded_hint(nfo_text: str) -> str:
+    """Indice de ré-encodage dans le NFO (vide si flux disque intact).
+
+    Sert à repérer un faux REMUX/BDMV/ISO : un mux pur (mkvmerge / Lavf) ne
+    laisse pas d'encodeur vidéo, un ré-encode si (x265, nvenc, Lavc…)."""
+    if has_encoding_settings(nfo_text):
+        return "Encoding settings (x264/x265)"
+    for ls in _encoder_lines(nfo_text):
+        if ls.lower().startswith("encoding settings"):
+            continue
+        m = _REENCODER_RX.search(ls)
+        if m:
+            return m.group(1)
+    return ""
+
+
 def audio_codec_tag(codec: str) -> str:
     c = (codec or "").upper().replace(" ", "").replace("-", "")
     if c == "EAC3":
