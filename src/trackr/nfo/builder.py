@@ -756,8 +756,8 @@ def build_description_bbcode(
     if len(eps) > 1:
         lines.append(_section_header(f"ÉPISODES ({len(eps)})"))
         lines.append("")
-        for e in eps:
-            lines.append(f"[*] {e}")
+        items = "".join(f"[*]{e}\n" for e in eps)
+        lines.append(f"[list]\n{items}[/list]")
         lines.append("")
 
     # Récap téléchargement
