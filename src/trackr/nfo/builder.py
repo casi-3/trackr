@@ -346,6 +346,52 @@ def detect_version_markers(file_path: Path) -> tuple[str, ...]:
     return tuple(_order_version_markers(found))
 
 
+_DV_NAME_RX = re.compile(r"(?:(?<=[._ \-])|^)(DV|DOVI|DOLBYVISION)(?=[._ \-]|$)", re.IGNORECASE)
+_HDR10P_NAME_RX = re.compile(r"(?:(?<=[._ \-])|^)(HDR10\+|HDR10PLUS)(?=[._ \-]|$)", re.IGNORECASE)
+_HDR_NAME_RX = re.compile(r"(?:(?<=[._ \-])|^)(HDR10|HDR)(?=[._ \-]|$)", re.IGNORECASE)
+
+
+def detect_dynamic_range(file_path: Path | None, info: MediaInfo) -> str:
+    """Tag plage dynamique pour le titre (vide = SDR, à n'rien indiquer).
+
+    Renvoie `HDR10` / `HDR10PLUS` / `DV` / `DV.HDR10` / `DV.HDR10PLUS`.
+    mediainfo prime ; le nom de fichier sert de repli. Règle C411 : `DV.HDR10`
+    réservé au DV avec fallback HDR10 (profils 7 / 8), DV profil 5 = `DV` seul.
+    """
+    v = getattr(info, "video", None)
+    fmt = (getattr(v, "hdr_format", "") or "").lower()
+    compat = (getattr(v, "hdr_format_compat", "") or "").lower()
+    prof = (getattr(v, "hdr_profile", "") or "").lower()
+    transfer = (getattr(v, "transfer", "") or "").lower()
+    name = file_path.name if file_path else ""
+
+    has_dv = "dolby vision" in fmt or bool(_DV_NAME_RX.search(name))
+    has_hdr10plus = (
+        "hdr10+" in fmt
+        or "smpte st 2094" in fmt
+        or "hdr10+" in compat
+        or bool(_HDR10P_NAME_RX.search(name))
+    )
+    has_hdr10 = (
+        "hdr10" in fmt
+        or "smpte st 2086" in fmt
+        or "hdr10" in compat
+        or "pq" in transfer
+        or "2084" in transfer
+        or bool(_HDR_NAME_RX.search(name))
+    )
+
+    base = "HDR10PLUS" if has_hdr10plus else ("HDR10" if has_hdr10 else "")
+    if has_dv:
+        is_p5 = ".05" in prof or "dvhe.05" in prof or "dav1.05" in prof
+        if is_p5 and not base:
+            return "DV"
+        if base:
+            return f"DV.{base}"
+        return "DV"
+    return base
+
+
 def _split_lang_markers(language_tag: str) -> tuple[str, list[str]]:
     lt = language_tag or ""
     markers: list[str] = []
@@ -370,12 +416,16 @@ def suggest_title_c411(
     version_markers: tuple[str, ...] = (),
     disc_structure: str = "",
     doc: bool = False,
+    season_episode: str = "",
+    dynamic_range: str | None = None,
 ) -> str:
-    """Format C411 Films : `Nom.Année[.DOC].[Marqueurs].Langue.Résolution.Source[.Structure].CodecAudio[.Channels].CodecVidéo-TEAM`.
+    """Format C411 : `Nom.Année[.Sxx[Eyy]][.DOC].[Marqueurs].Langue.Résolution.Source[.Structure][.HDR].CodecAudio[.Channels].CodecVidéo-TEAM`.
 
     `disc_structure` (REMUX/BDMV/ISO) ⇒ version pure ⇒ codec en HEVC/AVC.
     Sinon `is_reencode=False` ⇒ H265/H264 (WEB-DL untouched), True ⇒ x265/x264.
     `doc=True` ⇒ insère le marqueur DOC (documentaire) après l'année.
+    `season_episode` (ex `S01` ou `S01E02`) ⇒ inséré après l'année (séries).
+    `dynamic_range` : tag HDR/DV explicite ; None ⇒ déduit de mediainfo.
     """
     name = to_dot_case(hit.title)
     year = hit.year or ""
@@ -391,10 +441,17 @@ def suggest_title_c411(
     acodec = audio_track_tag(sel_audio) if sel_audio else ""
     chans = channels_tag(sel_audio.channels) if sel_audio else ""
     vcodec = video_codec_tag(info.video.codec, scene_style=is_reencode, pure=pure)
+    if dynamic_range is None:
+        dr = detect_dynamic_range(None, info)
+    else:
+        dr = (dynamic_range or "").strip()
+    se = (season_episode or "").strip().upper()
 
     parts = [name]
     if year:
         parts.append(year)
+    if se:
+        parts.append(se)
     if doc:
         parts.append("DOC")
     parts.extend(markers)
@@ -406,6 +463,8 @@ def suggest_title_c411(
         parts.append(src.replace(" ", ""))
     if structure:
         parts.append(structure)
+    if dr:
+        parts.append(dr)
     if acodec:
         if chans:
             parts.append(f"{acodec}.{chans}")
@@ -565,6 +624,9 @@ def build_description_bbcode(
     team_tag: str = "",
     file_count: int = 1,
     total_size: int | None = None,
+    dynamic_range: str = "",
+    season_episode: str = "",
+    episodes: list[str] | None = None,
 ) -> str:
     """`total_size` (bytes) prime sur `info.file_size` pour le « Poids total » —
     indispensable pour matcher la taille calculée par le tracker (= payload du
@@ -602,10 +664,17 @@ def build_description_bbcode(
     structure = (disc_structure or "").strip().upper()
     if structure:
         source_line = f"{source_line} {structure}"
+    dr = (dynamic_range or "").strip()
+    if dr:
+        source_line = f"{source_line} {dr}"
     if vod_platform:
         source_line = f"{source_line} ({vod_platform})"
     lines.append(f"[b]Source :[/b] {source_line}")
+    if season_episode:
+        lines.append(f"[b]Saison / Épisode :[/b] {season_episode}")
     lines.append(f"[b]Résolution :[/b] {resolution_label(info)}")
+    if dr:
+        lines.append(f"[b]Plage dynamique :[/b] {dr}")
     lines.append(f"[b]Codec Vidéo :[/b] {info.video.codec or '?'}"
                  + (f" {info.video.profile}" if info.video.profile else ""))
     if info.video.bitrate:
@@ -628,6 +697,15 @@ def build_description_bbcode(
         lines.append(_section_header("SOUS-TITRES"))
         lines.append("")
         lines.append(_subs_table(info.subtitles))
+        lines.append("")
+
+    # Liste des épisodes (packs saison)
+    eps = [e for e in (episodes or []) if e]
+    if len(eps) > 1:
+        lines.append(_section_header(f"ÉPISODES ({len(eps)})"))
+        lines.append("")
+        for e in eps:
+            lines.append(f"[*] {e}")
         lines.append("")
 
     # Récap téléchargement

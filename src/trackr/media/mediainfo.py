@@ -34,6 +34,10 @@ class VideoTrack:
     bit_depth: int = 0
     scan_type: str = ""
     duration_s: float = 0.0
+    hdr_format: str = ""
+    hdr_format_compat: str = ""
+    hdr_profile: str = ""
+    transfer: str = ""
 
 
 @dataclass
@@ -192,6 +196,10 @@ def probe(path: Path) -> MediaInfo:
                 bit_depth=_to_int(tr.get("BitDepth")),
                 scan_type=tr.get("ScanType", ""),
                 duration_s=_to_float(tr.get("Duration")),
+                hdr_format=tr.get("HDR_Format", ""),
+                hdr_format_compat=tr.get("HDR_Format_Compatibility", ""),
+                hdr_profile=tr.get("HDR_Format_Profile", ""),
+                transfer=tr.get("transfer_characteristics", ""),
             )
         elif kind == "Audio":
             info.audio.append(

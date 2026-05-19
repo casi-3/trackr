@@ -122,3 +122,10 @@ def movies_category() -> Cat:
     if not c:
         raise RuntimeError("Catégorie Films introuvable")
     return c
+
+
+def series_category() -> Cat:
+    c = find_cat("tv")
+    if not c:
+        raise RuntimeError("Catégorie Séries introuvable")
+    return c

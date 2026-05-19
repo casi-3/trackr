@@ -25,6 +25,7 @@ from trackr.nfo.builder import (
     build_description_bbcode,
     build_nfo,
     detect_language_tag,
+    detect_dynamic_range,
     detect_source_tag,
     detect_team_tag,
     detect_version_markers,
@@ -215,12 +216,14 @@ def run() -> None:
     is_doc = 99 in (hit.genre_ids or []) or bool(
         re.search(r"(?:(?<=[._ \-])|^)DOC(?=[._ \-]|$)", file_path.name, re.IGNORECASE)
     )
+    dynamic_range = detect_dynamic_range(file_path, info)
     title_default = suggest_title_c411(
         hit, info, source=source_hint, language_tag=language_tag, team=team_tag,
         is_reencode=is_reencode,
         version_markers=detect_version_markers(file_path),
         disc_structure=disc_structure,
         doc=is_doc,
+        dynamic_range=dynamic_range,
     )
     ui.console.print(f"[{ui.MUTED}]Format : Nom.Année[.DOC].[Marqueurs].Lang.Res.Source[.Structure].Audio.Vidéo-TEAM (sans accents).[/]")
     release_title = questionary.text("Titre release :", default=title_default).ask()
@@ -263,6 +266,7 @@ def run() -> None:
         disc_structure=disc_structure,
         team_tag=team_tag,
         total_size=payload_size,
+        dynamic_range=dynamic_range,
     )
     nfo_path = out_dir / "release.nfo"
     nfo_path.write_text(nfo_text, encoding="utf-8")

@@ -11,6 +11,7 @@ from trackr.flows import drafts as drafts_flow
 from trackr.flows import inspect as inspect_flow
 from trackr.flows import game as game_flow
 from trackr.flows import movie as movie_flow
+from trackr.flows import series as series_flow
 from trackr.flows import rejection as rejection_flow
 from trackr.flows import retry as retry_flow
 
@@ -124,7 +125,7 @@ def _movies_submenu() -> bool:
         "Type :",
         choices=[
             questionary.Choice("🎬  Un film", value="movie"),
-            questionary.Choice("📺  Une série  [bientôt]", value="series", disabled="à venir"),
+            questionary.Choice("📺  Une série (épisode ou saison)", value="series"),
             questionary.Choice("← Retour", value="back"),
         ],
     ).ask()
@@ -132,6 +133,9 @@ def _movies_submenu() -> bool:
         return False
     if choice == "movie":
         movie_flow.run()
+        return True
+    if choice == "series":
+        series_flow.run()
         return True
     return False
 
