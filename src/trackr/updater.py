@@ -151,6 +151,21 @@ class UpdateError(RuntimeError):
     pass
 
 
+def _clean_child_env() -> dict:
+    """Env pour relancer le binaire : sans les variables du bootloader PyInstaller.
+
+    Un onefile relancé qui hérite de `_PYI_*` / `_MEIPASS2` réutilise le dossier
+    temp du parent ; quand le parent meurt il le supprime → le nouveau process
+    perd son `_MEIPASS` (certifi, etc. introuvables). On les retire pour forcer
+    une extraction fraîche.
+    """
+    env = os.environ.copy()
+    for k in list(env):
+        if k.startswith("_PYI") or k == "_MEIPASS2":
+            env.pop(k, None)
+    return env
+
+
 def _download_to(url: str, dest: Path, timeout: float = 60.0) -> None:
     try:
         with make_client(user_agent=f"trackr/{__version__}") as c:
@@ -187,9 +202,10 @@ def _apply_binary(info: UpdateInfo) -> None:
     except OSError as e:
         tmp.unlink(missing_ok=True)
         raise UpdateError(f"Swap impossible : {e}") from e
-    # Restart
+    # Restart (env nettoyé : sinon le onefile relancé réutilise le _MEIPASS
+    # du process courant, supprimé à sa sortie → binaire cassé).
     try:
-        os.execv(str(current), [str(current), *sys.argv[1:]])
+        os.execve(str(current), [str(current), *sys.argv[1:]], _clean_child_env())
     except OSError as e:
         raise UpdateError(f"Redémarrage échoué : {e}") from e
 
@@ -225,7 +241,11 @@ def _apply_windows_binary(info: UpdateInfo) -> None:
         new.unlink(missing_ok=True)
         raise UpdateError(f"Installation du nouvel exe impossible : {e}") from e
     try:
-        subprocess.Popen([str(current), *sys.argv[1:]], cwd=str(current.parent))
+        subprocess.Popen(
+            [str(current), *sys.argv[1:]],
+            cwd=str(current.parent),
+            env=_clean_child_env(),
+        )
     except OSError as e:
         raise UpdateError(f"Redémarrage échoué : {e}") from e
     os._exit(0)
