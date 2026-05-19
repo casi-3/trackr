@@ -87,6 +87,18 @@ def _to_float(value) -> float:
         return 0.0
 
 
+def _bitrate(tr: dict, duration_s: float) -> int:
+    for key in ("BitRate", "BitRate_Nominal"):
+        v = _to_int(tr.get(key))
+        if v:
+            return v
+    size = _to_int(tr.get("StreamSize"))
+    dur = _to_float(tr.get("Duration")) or duration_s
+    if size and dur:
+        return int(size * 8 / dur)
+    return 0
+
+
 def _resolution_label(width: int, height: int) -> str:
     if height >= 2000:
         return "2160p"
@@ -176,7 +188,7 @@ def probe(path: Path) -> MediaInfo:
                 width=_to_int(tr.get("Width")),
                 height=_to_int(tr.get("Height")),
                 fps=_to_float(tr.get("FrameRate")),
-                bitrate=_to_int(tr.get("BitRate")),
+                bitrate=_bitrate(tr, info.duration_s),
                 bit_depth=_to_int(tr.get("BitDepth")),
                 scan_type=tr.get("ScanType", ""),
                 duration_s=_to_float(tr.get("Duration")),
@@ -187,7 +199,7 @@ def probe(path: Path) -> MediaInfo:
                     codec=tr.get("Format", ""),
                     channels=tr.get("Channels", ""),
                     sampling_rate=_to_int(tr.get("SamplingRate")),
-                    bitrate=_to_int(tr.get("BitRate")),
+                    bitrate=_bitrate(tr, info.duration_s),
                     language=tr.get("Language", ""),
                     title=tr.get("Title", ""),
                     commercial=tr.get("Format_Commercial_IfAny", ""),
